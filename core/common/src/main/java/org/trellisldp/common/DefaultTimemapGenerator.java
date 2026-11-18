@@ -28,7 +28,6 @@ import java.util.List;
 import java.util.stream.Stream;
 
 import javax.enterprise.inject.Alternative;
-import javax.ws.rs.core.Link;
 
 import org.apache.commons.rdf.api.IRI;
 import org.apache.commons.rdf.api.RDF;
@@ -50,7 +49,7 @@ public class DefaultTimemapGenerator implements TimemapGenerator {
     private static final RDF rdf = RDFFactory.getInstance();
 
     @Override
-    public Stream<Triple> asRdf(final String identifier, final List<Link> mementos) {
+    public Stream<Triple> asRdf(final String identifier, final List<LinkHeader> mementos) {
         final IRI originalResource = rdf.createIRI(identifier);
         final List<Triple> descriptions = new ArrayList<>();
 
@@ -68,7 +67,7 @@ public class DefaultTimemapGenerator implements TimemapGenerator {
                 mementos.stream().flatMap(DefaultTimemapGenerator::buildTriplesFromLink));
     }
 
-    static Stream<Triple> buildTriplesFromLink(final Link link) {
+    static Stream<Triple> buildTriplesFromLink(final LinkHeader link) {
         final String linkUri = link.getUri().toString();
         final IRI iri = rdf.createIRI(linkUri);
         final Stream.Builder<Triple> buffer = Stream.builder();
@@ -105,7 +104,7 @@ public class DefaultTimemapGenerator implements TimemapGenerator {
      * @param link the link
      * @return true if this is a valid link; false otherwise
      */
-    static boolean isMementoLink(final Link link) {
+    static boolean isMementoLink(final LinkHeader link) {
         return link.getRels().contains(MEMENTO) && link.getParams().containsKey(DATETIME);
     }
 }

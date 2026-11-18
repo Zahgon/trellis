@@ -18,7 +18,6 @@ package org.trellisldp.common;
 import java.util.List;
 import java.util.stream.Stream;
 
-import javax.ws.rs.core.Link;
 
 import org.apache.commons.rdf.api.Triple;
 
@@ -33,6 +32,6 @@ public interface TimemapGenerator {
      * @param mementos the mementos
      * @return a stream of triples
      */
-    Stream<Triple> asRdf(String identifier, List<Link> mementos);
+    Stream<Triple> asRdf(String identifier, List<LinkHeader> mementos);
 
 }

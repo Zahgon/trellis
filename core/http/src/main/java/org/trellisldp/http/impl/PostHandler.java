@@ -15,18 +15,19 @@
  */
 package org.trellisldp.http.impl;
 
-import static javax.ws.rs.HttpMethod.DELETE;
-import static javax.ws.rs.HttpMethod.GET;
-import static javax.ws.rs.HttpMethod.HEAD;
-import static javax.ws.rs.HttpMethod.OPTIONS;
-import static javax.ws.rs.HttpMethod.PATCH;
-import static javax.ws.rs.HttpMethod.PUT;
-import static javax.ws.rs.core.MediaType.APPLICATION_OCTET_STREAM;
-import static javax.ws.rs.core.Response.Status.BAD_REQUEST;
-import static javax.ws.rs.core.Response.Status.CONFLICT;
-import static javax.ws.rs.core.Response.Status.CREATED;
-import static javax.ws.rs.core.Response.Status.GONE;
-import static javax.ws.rs.core.Response.status;
+import static java.util.Arrays.asList;
+import static org.trellisldp.common.HttpConstants.DELETE;
+import static org.trellisldp.common.HttpConstants.GET;
+import static org.trellisldp.common.HttpConstants.HEAD;
+import static org.trellisldp.common.HttpConstants.OPTIONS;
+import static org.trellisldp.common.HttpConstants.PATCH;
+import static org.trellisldp.common.HttpConstants.PUT;
+import static org.trellisldp.common.MediaType.APPLICATION_OCTET_STREAM;
+import static org.trellisldp.common.HttpStatus.BAD_REQUEST;
+import static org.trellisldp.common.HttpStatus.CONFLICT;
+import static org.trellisldp.common.HttpStatus.CREATED;
+import static org.trellisldp.common.HttpStatus.GONE;
+import static org.trellisldp.common.TrellisResponse.status;
 import static org.apache.commons.rdf.api.RDFSyntax.TURTLE;
 import static org.slf4j.LoggerFactory.getLogger;
 import static org.trellisldp.api.Resource.SpecialResources.DELETED_RESOURCE;
@@ -37,19 +38,15 @@ import static org.trellisldp.vocabulary.Trellis.PreferUserManaged;
 import static org.trellisldp.vocabulary.Trellis.UnsupportedInteractionModel;
 
 import java.io.InputStream;
+import java.net.URI;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletionStage;
 import java.util.stream.Stream;
 
-import javax.ws.rs.BadRequestException;
-import javax.ws.rs.ClientErrorException;
-import javax.ws.rs.NotAllowedException;
-import javax.ws.rs.NotFoundException;
-import javax.ws.rs.core.Link;
-import javax.ws.rs.core.MediaType;
-import javax.ws.rs.core.Response.ResponseBuilder;
-import javax.ws.rs.core.UriBuilder;
+import org.trellisldp.common.LinkHeader;
+import org.trellisldp.common.MediaType;
+import org.trellisldp.common.TrellisResponse;
 
 import org.apache.commons.rdf.api.Dataset;
 import org.apache.commons.rdf.api.IRI;
@@ -59,6 +56,8 @@ import org.trellisldp.api.BinaryMetadata;
 import org.trellisldp.api.Metadata;
 import org.trellisldp.api.Resource;
 import org.trellisldp.common.ServiceBundler;
+import org.trellisldp.common.Uris;
+import org.trellisldp.common.TrellisHttpException;
 import org.trellisldp.common.TrellisRequest;
 import org.trellisldp.vocabulary.AS;
 import org.trellisldp.vocabulary.LDP;
@@ -118,7 +117,7 @@ public class PostHandler extends MutatingLdpHandler {
         return null;
     }
 
-    private static IRI getLdpType(final Link link, final RDFSyntax syntax, final String contentType) {
+    private static IRI getLdpType(final LinkHeader link, final RDFSyntax syntax, final String contentType) {
         if (link != null) {
             return rdf.createIRI(link.getUri().toString());
         }
@@ -131,25 +130,25 @@ public class PostHandler extends MutatingLdpHandler {
      * @param child the child resource
      * @return a response builder
      */
-    public ResponseBuilder initialize(final Resource parent, final Resource child) {
+    public TrellisResponse.Builder initialize(final Resource parent, final Resource child) {
         if (MISSING_RESOURCE.equals(parent)) {
             // Can't POST to a missing resource
-            throw new NotFoundException();
+            throw TrellisHttpException.notFound();
         } else if (DELETED_RESOURCE.equals(parent)) {
             // Can't POST to a deleted resource
-            throw new ClientErrorException(GONE);
+            throw TrellisHttpException.gone();
         } else if (getExtensionGraphName() != null
                 || ldpResourceTypes(parent.getInteractionModel()).noneMatch(LDP.Container::equals)) {
             // Can't POST to an ACL resource or non-Container
-            throw new NotAllowedException(GET, Stream.of(HEAD, OPTIONS, PATCH, PUT, DELETE).toArray(String[]::new));
+            throw TrellisHttpException.methodNotAllowed(GET, asList(HEAD, OPTIONS, PATCH, PUT, DELETE));
         } else if (!MISSING_RESOURCE.equals(child) && !DELETED_RESOURCE.equals(child)) {
-            throw new ClientErrorException(CONFLICT);
+            throw TrellisHttpException.of(CONFLICT);
         } else if (!supportsInteractionModel(ldpType)) {
-            throw new BadRequestException("Unsupported interaction model provided", status(BAD_REQUEST)
+            throw new TrellisHttpException("Unsupported interaction model provided", status(BAD_REQUEST)
                 .link(UnsupportedInteractionModel.getIRIString(), LDP.constrainedBy.getIRIString()).build());
         } else if (ldpType.equals(LDP.NonRDFSource) && rdfSyntax != null) {
             LOGGER.error("Cannot save {} as a NonRDFSource with RDF syntax", getIdentifier());
-            throw new BadRequestException("Cannot save resource as a NonRDFSource with RDF syntax");
+            throw TrellisHttpException.badRequest("Cannot save resource as a NonRDFSource with RDF syntax");
         }
 
         setParent(parent);
@@ -161,7 +160,7 @@ public class PostHandler extends MutatingLdpHandler {
      * @param builder the response builder
      * @return the response builder
      */
-    public CompletionStage<ResponseBuilder> createResource(final ResponseBuilder builder) {
+    public CompletionStage<TrellisResponse.Builder> createResource(final TrellisResponse.Builder builder) {
         LOGGER.debug("Creating resource as {}", getIdentifier());
 
         final Dataset mutable = rdf.createDataset();
@@ -172,8 +171,8 @@ public class PostHandler extends MutatingLdpHandler {
             .whenComplete((a, b) -> closeDataset(immutable));
     }
 
-    private CompletionStage<ResponseBuilder> handleResourceCreation(final Dataset mutable,
-            final Dataset immutable, final ResponseBuilder builder) {
+    private CompletionStage<TrellisResponse.Builder> handleResourceCreation(final Dataset mutable,
+            final Dataset immutable, final TrellisResponse.Builder builder) {
 
         final Metadata metadata;
         final BinaryMetadata binary;
@@ -185,7 +184,7 @@ public class PostHandler extends MutatingLdpHandler {
 
             // Persist the content
             binary = BinaryMetadata.builder(binaryLocation).mimeType(mimeType)
-                            .hints(getRequest().getHeaders()).build();
+                            .hints(getRequest().getHeaders().asMap()).build();
 
             metadata = metadataBuilder(internalId, ldpType, mutable).container(parentIdentifier).binary(binary).build();
             builder.link(getIdentifier() + "?ext=description", "describedby");
@@ -206,8 +205,8 @@ public class PostHandler extends MutatingLdpHandler {
             .thenCompose(future -> persistBinaryContent(binary))
             .thenCompose(future -> emitEvent(internalId, AS.Create, ldpType))
             .thenApply(future -> {
-                ldpResourceTypes(ldpType).map(IRI::getIRIString).forEach(type -> builder.link(type, Link.TYPE));
-                return builder.location(UriBuilder.fromUri(getIdentifier()).build());
+                ldpResourceTypes(ldpType).map(IRI::getIRIString).forEach(type -> builder.link(type, LinkHeader.TYPE));
+                return builder.location(Uris.parse(getIdentifier()));
             });
     }
 

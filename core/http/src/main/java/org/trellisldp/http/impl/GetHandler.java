@@ -16,27 +16,28 @@
 package org.trellisldp.http.impl;
 
 import static java.lang.String.join;
-import static java.util.Date.from;
 import static java.util.concurrent.CompletableFuture.completedFuture;
 import static java.util.stream.Collectors.joining;
+import static java.util.stream.Collectors.toList;
 import static java.util.stream.Collectors.toMap;
 import static java.util.stream.Stream.concat;
 import static java.util.stream.Stream.of;
-import static javax.ws.rs.HttpMethod.DELETE;
-import static javax.ws.rs.HttpMethod.GET;
-import static javax.ws.rs.HttpMethod.HEAD;
-import static javax.ws.rs.HttpMethod.OPTIONS;
-import static javax.ws.rs.HttpMethod.PATCH;
-import static javax.ws.rs.HttpMethod.POST;
-import static javax.ws.rs.HttpMethod.PUT;
-import static javax.ws.rs.core.HttpHeaders.ACCEPT;
-import static javax.ws.rs.core.HttpHeaders.ALLOW;
-import static javax.ws.rs.core.HttpHeaders.VARY;
-import static javax.ws.rs.core.MediaType.APPLICATION_OCTET_STREAM;
-import static javax.ws.rs.core.MediaType.WILDCARD;
-import static javax.ws.rs.core.Response.Status.GONE;
-import static javax.ws.rs.core.Response.Status.NO_CONTENT;
-import static javax.ws.rs.core.Response.ok;
+import static org.trellisldp.common.HttpConstants.DELETE;
+import static org.trellisldp.common.HttpConstants.GET;
+import static org.trellisldp.common.HttpConstants.HEAD;
+import static org.trellisldp.common.HttpConstants.OPTIONS;
+import static org.trellisldp.common.HttpConstants.PATCH;
+import static org.trellisldp.common.HttpConstants.POST;
+import static org.trellisldp.common.HttpConstants.PUT;
+import static org.trellisldp.common.TrellisResponse.ACCEPT;
+import static org.trellisldp.common.TrellisResponse.ALLOW;
+import static org.trellisldp.common.TrellisResponse.VARY;
+import static org.trellisldp.common.MediaType.APPLICATION_OCTET_STREAM;
+import static org.trellisldp.common.MediaType.WILDCARD;
+import static org.trellisldp.common.HttpStatus.GONE;
+import static org.trellisldp.common.HttpStatus.NO_CONTENT;
+import static org.trellisldp.common.HttpStatus.SEE_OTHER;
+import static org.trellisldp.common.TrellisResponse.ok;
 import static org.slf4j.LoggerFactory.getLogger;
 import static org.trellisldp.api.Resource.SpecialResources.DELETED_RESOURCE;
 import static org.trellisldp.api.Resource.SpecialResources.MISSING_RESOURCE;
@@ -73,14 +74,10 @@ import java.util.SortedSet;
 import java.util.concurrent.CompletionStage;
 import java.util.stream.Stream;
 
-import javax.ws.rs.ClientErrorException;
-import javax.ws.rs.NotFoundException;
-import javax.ws.rs.RedirectionException;
-import javax.ws.rs.core.EntityTag;
-import javax.ws.rs.core.Link;
-import javax.ws.rs.core.Response.ResponseBuilder;
-import javax.ws.rs.core.StreamingOutput;
-import javax.ws.rs.core.UriBuilder;
+import org.trellisldp.common.EntityTag;
+import org.trellisldp.common.LinkHeader;
+import org.trellisldp.common.TrellisResponse;
+import org.trellisldp.common.StreamWriter;
 
 import org.apache.commons.rdf.api.IRI;
 import org.apache.commons.rdf.api.Quad;
@@ -91,6 +88,9 @@ import org.trellisldp.api.BinaryMetadata;
 import org.trellisldp.api.Resource;
 import org.trellisldp.common.Prefer;
 import org.trellisldp.common.ServiceBundler;
+import org.trellisldp.common.StreamWriter;
+import org.trellisldp.common.TrellisHttpException;
+import org.trellisldp.common.Uris;
 import org.trellisldp.common.TrellisRequest;
 import org.trellisldp.common.Version;
 import org.trellisldp.vocabulary.LDP;
@@ -133,12 +133,12 @@ public class GetHandler extends BaseLdpHandler {
      * @param resource the Trellis resource
      * @return the response builder
      */
-    public ResponseBuilder initialize(final Resource resource) {
+    public TrellisResponse.Builder initialize(final Resource resource) {
 
         if (MISSING_RESOURCE.equals(resource)) {
-            throw new NotFoundException();
+            throw TrellisHttpException.notFound();
         } else if (DELETED_RESOURCE.equals(resource)) {
-            throw new ClientErrorException(GONE);
+            throw TrellisHttpException.gone();
         }
 
         // Redirect for certain trailing slash conditions
@@ -154,7 +154,7 @@ public class GetHandler extends BaseLdpHandler {
         final IRI ext = getExtensionGraphName();
         if (ext != null && !resource.stream(ext).findAny().isPresent()) {
             LOGGER.trace("No stream for extention: {}", ext);
-            throw new NotFoundException();
+            throw TrellisHttpException.notFound();
         }
 
         setResource(resource);
@@ -166,10 +166,10 @@ public class GetHandler extends BaseLdpHandler {
      * @param builder the response builder
      * @return the response builder
      */
-    public ResponseBuilder standardHeaders(final ResponseBuilder builder) {
+    public TrellisResponse.Builder standardHeaders(final TrellisResponse.Builder builder) {
 
         // Standard HTTP Headers
-        builder.lastModified(from(getResource().getModified()));
+        builder.lastModified(getResource().getModified());
 
         if (syntax != null) {
             builder.type(syntax.mediaType());
@@ -191,7 +191,7 @@ public class GetHandler extends BaseLdpHandler {
 
         // Memento-related headers
         if (isMemento) {
-            builder.header(MEMENTO_DATETIME, from(getResource().getModified()));
+            builder.header(MEMENTO_DATETIME, getResource().getModified());
         }
 
         return builder;
@@ -203,7 +203,7 @@ public class GetHandler extends BaseLdpHandler {
      * @param builder the response builder
      * @return the response builder
      */
-    public CompletionStage<ResponseBuilder> getRepresentation(final ResponseBuilder builder) {
+    public CompletionStage<TrellisResponse.Builder> getRepresentation(final TrellisResponse.Builder builder) {
         // Add NonRDFSource-related "describe*" link headers, provided this isn't an extension resource
         getResource().getBinaryMetadata().filter(ds -> getExtensionGraphName() == null).ifPresent(ds -> {
             final String base = getBaseBinaryIdentifier();
@@ -232,18 +232,18 @@ public class GetHandler extends BaseLdpHandler {
 
     /**
      * Add the memento headers.
-     * @param builder the ResponseBuilder
+     * @param builder the TrellisResponse.Builder
      * @param mementos the list of memento ranges
      * @return the response builder
      */
-    public ResponseBuilder addMementoHeaders(final ResponseBuilder builder, final SortedSet<Instant> mementos) {
+    public TrellisResponse.Builder addMementoHeaders(final TrellisResponse.Builder builder, final SortedSet<Instant> mementos) {
         // Only show memento links for the user-managed graph (not extension graphs)
         if (getExtensionGraphName() == null) {
             builder.link(getIdentifier(), "original timegate")
                 .links(MementoResource.getMementoHeaders(getIdentifier(), mementos, isMemento ?
                             getResource().getModified() : null)
                         .map(link -> MementoResource.filterLinkParams(link, !includeMementoDates))
-                        .toArray(Link[]::new));
+                        .collect(toList()));
         }
         return builder;
     }
@@ -281,7 +281,7 @@ public class GetHandler extends BaseLdpHandler {
         return getIdentifier();
     }
 
-    private void addAllowHeaders(final ResponseBuilder builder) {
+    private void addAllowHeaders(final TrellisResponse.Builder builder) {
         if (isMemento) {
             builder.header(ALLOW, join(",", GET, HEAD, OPTIONS));
         } else if (getExtensionGraphName() != null) {
@@ -293,7 +293,7 @@ public class GetHandler extends BaseLdpHandler {
         }
     }
 
-    private ResponseBuilder getLdpRs(final ResponseBuilder builder, final RDFSyntax syntax,
+    private TrellisResponse.Builder getLdpRs(final TrellisResponse.Builder builder, final RDFSyntax syntax,
             final IRI profile) {
         final Prefer prefer = getRequest().getPrefer();
 
@@ -318,7 +318,7 @@ public class GetHandler extends BaseLdpHandler {
         }
 
         // Stream the rdf content
-        return builder.entity((StreamingOutput) out -> {
+        return builder.entity((StreamWriter) out -> {
             try (final Stream<Quad> stream = getResource().stream(getPreferredGraphs(prefer))) {
                 getServices().getIOService().write(stream.map(Quad::asTriple)
                                 .map(unskolemizeTriples(getServices().getResourceService(), getBaseUrl())), out,
@@ -342,7 +342,7 @@ public class GetHandler extends BaseLdpHandler {
         return getDefaultProfile(syntax, getIdentifier(), defaultJsonLdProfile);
     }
 
-    private CompletionStage<ResponseBuilder> getLdpNr(final ResponseBuilder builder) {
+    private CompletionStage<TrellisResponse.Builder> getLdpNr(final TrellisResponse.Builder builder) {
 
         final EntityTag etag = generateEtag(getResource());
         checkCache(getResource().getModified(), etag);
@@ -360,7 +360,7 @@ public class GetHandler extends BaseLdpHandler {
 
         // Stream the binary content
         return getBinaryStream(dsid, getRequest())
-                        .thenApply(in -> (StreamingOutput) out -> copy(in, out))
+                        .thenApply(in -> (StreamWriter) out -> copy(in, out))
                         .thenApply(builder::entity);
     }
 
@@ -392,9 +392,9 @@ public class GetHandler extends BaseLdpHandler {
         return join(",", variants);
     }
 
-    private void addLdpHeaders(final ResponseBuilder builder, final IRI model) {
+    private void addLdpHeaders(final TrellisResponse.Builder builder, final IRI model) {
         ldpResourceTypes(model).forEach(type -> {
-            builder.link(type.getIRIString(), Link.TYPE);
+            builder.link(type.getIRIString(), LinkHeader.TYPE);
             // Mementos don't accept POST or PATCH
             if (LDP.Container.equals(type) && !isMemento) {
                 final List<RDFSyntax> rdfSyntaxes = getServices().getIOService().supportedWriteSyntaxes();
@@ -410,12 +410,12 @@ public class GetHandler extends BaseLdpHandler {
 
     private void handleTrailingSlashRedirection(final Resource resource) {
         if (getRequest().hasTrailingSlash() && !isContainer(resource.getInteractionModel())) {
-            throw new RedirectionException(303,
-                    UriBuilder.fromUri(getBaseUrl()).path(normalizePath(getRequest().getPath())).build());
+            throw TrellisHttpException.redirect(SEE_OTHER,
+                    Uris.resolve(getBaseUrl(), normalizePath(getRequest().getPath())));
         } else if (!getRequest().hasTrailingSlash() && !getRequest().getPath().isEmpty()
                 && isContainer(resource.getInteractionModel())) {
-            throw new RedirectionException(303,
-                    UriBuilder.fromUri(getBaseUrl()).path(normalizePath(getRequest().getPath()) + "/").build());
+            throw TrellisHttpException.redirect(SEE_OTHER,
+                    Uris.resolve(getBaseUrl(), normalizePath(getRequest().getPath()) + "/"));
         }
     }
 }

@@ -24,7 +24,6 @@ import static org.trellisldp.vocabulary.Trellis.AnonymousAgent;
 import java.time.Instant;
 import java.util.Optional;
 
-import javax.ws.rs.core.SecurityContext;
 
 import org.apache.commons.rdf.api.IRI;
 import org.apache.commons.rdf.api.RDF;
@@ -97,7 +96,7 @@ public class HttpSession implements Session {
      * @param security the security context
      * @return the session
      */
-    public static Session from(final SecurityContext security) {
+    public static Session from(final AuthContext security) {
         if (security != null && security.getUserPrincipal() != null && security.getUserPrincipal().getName() != null) {
             final IRI webid = rdf.createIRI(security.getUserPrincipal().getName());
             if (security.isUserInRole(TrellisRoles.ADMIN)) {

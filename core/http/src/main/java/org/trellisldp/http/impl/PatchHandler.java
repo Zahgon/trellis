@@ -16,14 +16,14 @@
 package org.trellisldp.http.impl;
 
 import static java.util.stream.Collectors.toList;
-import static javax.ws.rs.core.MediaType.TEXT_PLAIN_TYPE;
-import static javax.ws.rs.core.Response.Status.BAD_REQUEST;
-import static javax.ws.rs.core.Response.Status.CONFLICT;
-import static javax.ws.rs.core.Response.Status.CREATED;
-import static javax.ws.rs.core.Response.Status.GONE;
-import static javax.ws.rs.core.Response.Status.NO_CONTENT;
-import static javax.ws.rs.core.Response.ok;
-import static javax.ws.rs.core.Response.status;
+import static org.trellisldp.common.MediaType.TEXT_PLAIN;
+import static org.trellisldp.common.HttpStatus.BAD_REQUEST;
+import static org.trellisldp.common.HttpStatus.CONFLICT;
+import static org.trellisldp.common.HttpStatus.CREATED;
+import static org.trellisldp.common.HttpStatus.GONE;
+import static org.trellisldp.common.HttpStatus.NO_CONTENT;
+import static org.trellisldp.common.TrellisResponse.ok;
+import static org.trellisldp.common.TrellisResponse.status;
 import static org.slf4j.LoggerFactory.getLogger;
 import static org.trellisldp.api.Resource.SpecialResources.DELETED_RESOURCE;
 import static org.trellisldp.api.Resource.SpecialResources.MISSING_RESOURCE;
@@ -46,14 +46,10 @@ import java.util.Map;
 import java.util.concurrent.CompletionStage;
 import java.util.stream.Stream;
 
-import javax.ws.rs.BadRequestException;
-import javax.ws.rs.ClientErrorException;
-import javax.ws.rs.NotFoundException;
-import javax.ws.rs.NotSupportedException;
-import javax.ws.rs.core.Link;
-import javax.ws.rs.core.MediaType;
-import javax.ws.rs.core.Response.ResponseBuilder;
-import javax.ws.rs.core.StreamingOutput;
+import org.trellisldp.common.LinkHeader;
+import org.trellisldp.common.MediaType;
+import org.trellisldp.common.TrellisResponse;
+import org.trellisldp.common.StreamWriter;
 
 import org.apache.commons.rdf.api.Dataset;
 import org.apache.commons.rdf.api.Graph;
@@ -69,6 +65,8 @@ import org.trellisldp.api.Resource;
 import org.trellisldp.api.TrellisRuntimeException;
 import org.trellisldp.common.Prefer;
 import org.trellisldp.common.ServiceBundler;
+import org.trellisldp.common.StreamWriter;
+import org.trellisldp.common.TrellisHttpException;
 import org.trellisldp.common.TrellisRequest;
 import org.trellisldp.vocabulary.AS;
 import org.trellisldp.vocabulary.LDP;
@@ -123,24 +121,24 @@ public class PatchHandler extends MutatingLdpHandler {
      * @param resource the Trellis resource
      * @return a response builder
      */
-    public ResponseBuilder initialize(final Resource parent, final Resource resource) {
+    public TrellisResponse.Builder initialize(final Resource parent, final Resource resource) {
 
         if (!supportsCreate && MISSING_RESOURCE.equals(resource)) {
             // Can't patch non-existent resources
-            throw new NotFoundException();
+            throw TrellisHttpException.notFound();
         } else if (!supportsCreate && DELETED_RESOURCE.equals(resource)) {
             // Can't patch non-existent resources
-            throw new ClientErrorException(GONE);
+            throw TrellisHttpException.gone();
         } else if (updateBody == null) {
-            throw new BadRequestException("Missing body for update");
+            throw TrellisHttpException.badRequest("Missing body for update");
         } else if (!supportsInteractionModel(LDP.RDFSource)) {
-            throw new BadRequestException(status(BAD_REQUEST)
+            throw new TrellisHttpException(status(BAD_REQUEST)
                 .link(UnsupportedInteractionModel.getIRIString(), LDP.constrainedBy.getIRIString())
-                .entity("Unsupported interaction model provided").type(TEXT_PLAIN_TYPE).build());
+                .entity("Unsupported interaction model provided").type(TEXT_PLAIN).build());
         } else if (syntax == null) {
             // Get the incoming syntax and check that the underlying I/O service supports it
             LOGGER.debug("Content-Type: {} not supported", getRequest().getContentType());
-            throw new NotSupportedException();
+            throw TrellisHttpException.unsupportedMediaType();
         }
         // Check the cache headers
         if (exists(resource)) {
@@ -161,14 +159,14 @@ public class PatchHandler extends MutatingLdpHandler {
      * @param builder the Trellis response builder
      * @return a response builder promise
      */
-    public CompletionStage<ResponseBuilder> updateResource(final ResponseBuilder builder) {
+    public CompletionStage<TrellisResponse.Builder> updateResource(final TrellisResponse.Builder builder) {
         LOGGER.debug("Updating {} via PATCH", getIdentifier());
 
         // Add the LDP link types
         if (getExtensionGraphName() != null) {
-            getLinkTypes(LDP.RDFSource).forEach(type -> builder.link(type, Link.TYPE));
+            getLinkTypes(LDP.RDFSource).forEach(type -> builder.link(type, LinkHeader.TYPE));
         } else {
-            getLinkTypes(getLdpType()).forEach(type -> builder.link(type, Link.TYPE));
+            getLinkTypes(getLdpType()).forEach(type -> builder.link(type, LinkHeader.TYPE));
         }
 
         final Dataset mutable = rdf.createDataset();
@@ -218,8 +216,8 @@ public class PatchHandler extends MutatingLdpHandler {
         return getResource() != null ? getResource().getInteractionModel() : LDP.RDFSource;
     }
 
-    private CompletionStage<ResponseBuilder> assembleResponse(final Dataset mutable,
-            final Dataset immutable, final ResponseBuilder builder) {
+    private CompletionStage<TrellisResponse.Builder> assembleResponse(final Dataset mutable,
+            final Dataset immutable, final TrellisResponse.Builder builder) {
 
         final IRI ext = getExtensionGraphName();
         final IRI graphName = ext != null ? ext : PreferUserManaged;
@@ -229,7 +227,7 @@ public class PatchHandler extends MutatingLdpHandler {
         try {
             triples = updateGraph(syntax, graphName);
         } catch (final TrellisRuntimeException ex) {
-            throw new BadRequestException("Invalid RDF: " + ex.getMessage(), ex);
+            throw TrellisHttpException.badRequest("Invalid RDF: " + ex.getMessage());
         }
 
         triples.stream().map(skolemizeTriples(getServices().getResourceService(), getBaseUrl()))
@@ -244,9 +242,9 @@ public class PatchHandler extends MutatingLdpHandler {
 
         // Short-ciruit if there is a constraint violation
         if (!violations.isEmpty()) {
-            final ResponseBuilder err = status(CONFLICT);
+            final TrellisResponse.Builder err = status(CONFLICT);
             violations.forEach(v -> err.link(v.getConstraint().getIRIString(), LDP.constrainedBy.getIRIString()));
-            throw new ClientErrorException(err.entity((StreamingOutput) out ->
+            throw new TrellisHttpException(err.entity((StreamWriter) out ->
                     getServices().getIOService().write(violations.stream().flatMap(v2 -> v2.getTriples().stream()),
                             out, RDFSyntax.TURTLE, getIdentifier())).type(RDFSyntax.TURTLE.mediaType()).build());
         }
@@ -283,7 +281,7 @@ public class PatchHandler extends MutatingLdpHandler {
                 if (preference != null) {
                     final IRI profile = getResponseProfile(outputSyntax);
                     return builder.header(PREFERENCE_APPLIED, "return=representation")
-                        .type(outputSyntax.mediaType()).entity((StreamingOutput) out ->
+                        .type(outputSyntax.mediaType()).entity((StreamWriter) out ->
                             getServices().getIOService().write(triples.stream()
                                         .map(unskolemizeTriples(getServices().getResourceService(), getBaseUrl())),
                                         out, outputSyntax, getIdentifier(), profile));

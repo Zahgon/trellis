@@ -15,30 +15,24 @@
  */
 package org.trellisldp.http;
 
-import static javax.ws.rs.HttpMethod.GET;
-import static javax.ws.rs.HttpMethod.HEAD;
-import static javax.ws.rs.core.HttpHeaders.CACHE_CONTROL;
-import static javax.ws.rs.core.Response.Status.Family.SUCCESSFUL;
 import static org.eclipse.microprofile.config.ConfigProvider.getConfig;
-
-import javax.ws.rs.container.ContainerRequestContext;
-import javax.ws.rs.container.ContainerResponseContext;
-import javax.ws.rs.container.ContainerResponseFilter;
-import javax.ws.rs.core.CacheControl;
-import javax.ws.rs.ext.Provider;
+import static org.trellisldp.common.HttpConstants.GET;
+import static org.trellisldp.common.HttpConstants.HEAD;
+import static org.trellisldp.common.TrellisResponse.CACHE_CONTROL;
 
 import org.eclipse.microprofile.config.Config;
-import org.trellisldp.common.LdpResource;
+import org.trellisldp.common.CacheControl;
+import org.trellisldp.common.HttpRequestContext;
+import org.trellisldp.common.HttpResponseFilter;
+import org.trellisldp.common.TrellisResponse;
 
 /**
- * A {@link ContainerResponseFilter} that adds Cache-Control headers to all
+ * An {@link HttpResponseFilter} that adds Cache-Control headers to all
  * {@code GET} responses.
  *
  * @author acoburn
  */
-@Provider
-@LdpResource
-public class CacheControlFilter implements ContainerResponseFilter {
+public class CacheControlFilter implements HttpResponseFilter {
 
     /** The configuration key for setting a cache-control max-age header. */
     public static final String CONFIG_HTTP_CACHE_MAX_AGE = "trellis.http.cache-max-age";
@@ -86,14 +80,14 @@ public class CacheControlFilter implements ContainerResponseFilter {
     }
 
     @Override
-    public void filter(final ContainerRequestContext req, final ContainerResponseContext res) {
+    public void filter(final HttpRequestContext req, final TrellisResponse res) {
         if ((GET.equals(req.getMethod()) || HEAD.equals(req.getMethod()))
-                && SUCCESSFUL.equals(res.getStatusInfo().getFamily()) && maxAge > 0) {
+                && res.isSuccessful() && maxAge > 0) {
             final CacheControl cc = new CacheControl();
             cc.setMaxAge(maxAge);
             cc.setMustRevalidate(mustRevalidate);
             cc.setNoCache(noCache);
-            res.getHeaders().add(CACHE_CONTROL, cc);
+            res.getHeaders().add(CACHE_CONTROL, cc.toString());
         }
     }
 }

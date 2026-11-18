@@ -31,6 +31,27 @@ import org.apache.commons.rdf.api.IRI;
  */
 public final class HttpConstants {
 
+    /** The HTTP method that fetches a representation of a resource. */
+    public static final String GET = "GET";
+
+    /** The HTTP method that fetches only the headers of a representation. */
+    public static final String HEAD = "HEAD";
+
+    /** The HTTP method that asks what a resource allows. */
+    public static final String OPTIONS = "OPTIONS";
+
+    /** The HTTP method that creates a resource inside a container. */
+    public static final String POST = "POST";
+
+    /** The HTTP method that creates or replaces a resource. */
+    public static final String PUT = "PUT";
+
+    /** The HTTP method that updates part of a resource. */
+    public static final String PATCH = "PATCH";
+
+    /** The HTTP method that removes a resource. */
+    public static final String DELETE = "DELETE";
+
     /** The name of the HTTP request header used for Memento datetime negotiation. */
     public static final String ACCEPT_DATETIME = "Accept-Datetime";
 

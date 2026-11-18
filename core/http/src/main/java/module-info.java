@@ -20,15 +20,15 @@ module org.trellisldp.http {
     requires org.trellisldp.common;
     requires org.trellisldp.vocabulary;
 
+    requires io.helidon.common.http;
+    requires io.helidon.webserver;
+
     requires org.apache.commons.codec;
+    requires org.apache.commons.lang3;
     requires org.apache.commons.rdf.api;
     requires org.slf4j;
 
     requires microprofile.config.api;
     requires jakarta.enterprise.cdi.api;
     requires jakarta.inject;
-    requires java.annotation;
-    requires java.ws.rs;
-    requires java.xml.bind;
-    requires microprofile.metrics.api;
 }

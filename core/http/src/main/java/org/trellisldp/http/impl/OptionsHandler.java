@@ -19,17 +19,17 @@ import static java.lang.String.join;
 import static java.util.stream.Collectors.joining;
 import static java.util.stream.Stream.concat;
 import static java.util.stream.Stream.of;
-import static javax.ws.rs.HttpMethod.DELETE;
-import static javax.ws.rs.HttpMethod.GET;
-import static javax.ws.rs.HttpMethod.HEAD;
-import static javax.ws.rs.HttpMethod.OPTIONS;
-import static javax.ws.rs.HttpMethod.PATCH;
-import static javax.ws.rs.HttpMethod.POST;
-import static javax.ws.rs.HttpMethod.PUT;
-import static javax.ws.rs.core.HttpHeaders.ALLOW;
-import static javax.ws.rs.core.MediaType.WILDCARD;
-import static javax.ws.rs.core.Response.Status.NO_CONTENT;
-import static javax.ws.rs.core.Response.status;
+import static org.trellisldp.common.HttpConstants.DELETE;
+import static org.trellisldp.common.HttpConstants.GET;
+import static org.trellisldp.common.HttpConstants.HEAD;
+import static org.trellisldp.common.HttpConstants.OPTIONS;
+import static org.trellisldp.common.HttpConstants.PATCH;
+import static org.trellisldp.common.HttpConstants.POST;
+import static org.trellisldp.common.HttpConstants.PUT;
+import static org.trellisldp.common.TrellisResponse.ALLOW;
+import static org.trellisldp.common.MediaType.WILDCARD;
+import static org.trellisldp.common.HttpStatus.NO_CONTENT;
+import static org.trellisldp.common.TrellisResponse.status;
 import static org.slf4j.LoggerFactory.getLogger;
 import static org.trellisldp.common.HttpConstants.ACCEPT_PATCH;
 import static org.trellisldp.common.HttpConstants.ACCEPT_POST;
@@ -39,7 +39,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
 
-import javax.ws.rs.core.Response.ResponseBuilder;
+import org.trellisldp.common.TrellisResponse;
 
 import org.apache.commons.rdf.api.IRI;
 import org.apache.commons.rdf.api.RDFSyntax;
@@ -72,7 +72,7 @@ public class OptionsHandler extends BaseLdpHandler {
      *
      * @return the options response builder
      */
-    public ResponseBuilder ldpOptions() {
+    public TrellisResponse.Builder ldpOptions() {
         LOGGER.debug("OPTIONS request for {}", getIdentifier());
 
         final List<RDFSyntax> rdfSyntaxes = getServices().getIOService().supportedWriteSyntaxes();

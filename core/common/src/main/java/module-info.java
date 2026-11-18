@@ -25,6 +25,5 @@ module org.trellisldp.common {
 
     requires microprofile.config.api;
     requires jakarta.enterprise.cdi.api;
-    requires java.ws.rs;
     requires java.xml.bind;
 }

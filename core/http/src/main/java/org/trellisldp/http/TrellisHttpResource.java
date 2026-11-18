@@ -28,51 +28,23 @@ import java.io.InputStream;
 import java.util.Map;
 import java.util.concurrent.CompletionStage;
 
-import javax.annotation.PostConstruct;
-import javax.annotation.security.PermitAll;
-import javax.enterprise.context.ApplicationScoped;
-import javax.inject.Inject;
-import javax.ws.rs.ClientErrorException;
-import javax.ws.rs.DELETE;
-import javax.ws.rs.GET;
-import javax.ws.rs.HEAD;
-import javax.ws.rs.NotAcceptableException;
-import javax.ws.rs.NotFoundException;
-import javax.ws.rs.OPTIONS;
-import javax.ws.rs.PATCH;
-import javax.ws.rs.POST;
-import javax.ws.rs.PUT;
-import javax.ws.rs.Path;
-import javax.ws.rs.RedirectionException;
-import javax.ws.rs.WebApplicationException;
-import javax.ws.rs.core.Context;
-import javax.ws.rs.core.HttpHeaders;
-import javax.ws.rs.core.Request;
-import javax.ws.rs.core.Response;
-import javax.ws.rs.core.Response.ResponseBuilder;
-import javax.ws.rs.core.SecurityContext;
-import javax.ws.rs.core.UriInfo;
-
 import org.apache.commons.rdf.api.Dataset;
 import org.apache.commons.rdf.api.IRI;
 import org.apache.commons.rdf.api.RDF;
 import org.eclipse.microprofile.config.Config;
-import org.eclipse.microprofile.metrics.annotation.Timed;
-import org.eclipse.microprofile.openapi.annotations.Operation;
-import org.eclipse.microprofile.openapi.annotations.media.Content;
-import org.eclipse.microprofile.openapi.annotations.parameters.RequestBody;
-import org.eclipse.microprofile.openapi.annotations.responses.APIResponse;
-import org.eclipse.microprofile.openapi.annotations.responses.APIResponses;
 import org.slf4j.Logger;
 import org.trellisldp.api.Metadata;
 import org.trellisldp.api.RDFFactory;
 import org.trellisldp.api.Resource;
 import org.trellisldp.api.StorageConflictException;
 import org.trellisldp.api.TrellisRuntimeException;
-import org.trellisldp.common.LdpResource;
+import org.trellisldp.common.HttpRequestContext;
+import org.trellisldp.common.HttpStatus;
 import org.trellisldp.common.ServiceBundler;
 import org.trellisldp.common.TrellisExtensions;
+import org.trellisldp.common.TrellisHttpException;
 import org.trellisldp.common.TrellisRequest;
+import org.trellisldp.common.TrellisResponse;
 import org.trellisldp.http.impl.DeleteHandler;
 import org.trellisldp.http.impl.GetConfiguration;
 import org.trellisldp.http.impl.GetHandler;
@@ -84,14 +56,13 @@ import org.trellisldp.http.impl.PutHandler;
 import org.trellisldp.vocabulary.LDP;
 
 /**
- * An HTTP request matcher for path-based HTTP resource operations.
+ * The LDP operations on a resource, one method of the HTTP protocol at a time.
+ *
+ * <p>Nothing here knows which web server carries the request: it is handed a request and it answers
+ * with a response, which the serving layer writes.
  *
  * @author acoburn
  */
-@ApplicationScoped
-@Path("{path: .*}")
-@LdpResource
-@PermitAll
 public class TrellisHttpResource {
 
     private static final Logger LOGGER = getLogger(TrellisHttpResource.class);
@@ -109,46 +80,32 @@ public class TrellisHttpResource {
     protected final boolean supportsCreateOnPatch;
 
     /**
-     * Create a Trellis HTTP resource matcher.
+     * Create a Trellis HTTP resource handler.
      *
      * @param trellis the Trellis application bundle
      */
-    @Inject
     public TrellisHttpResource(final ServiceBundler trellis) {
         this(trellis, getConfig());
     }
 
-    /**
-     * For use with RESTeasy and CDI.
-     *
-     * @apiNote This construtor is used by CDI runtimes that require a public, no-argument constructor.
-     *          It should not be invoked directly in user code.
-     */
-    public TrellisHttpResource() {
-        this(null);
-    }
-
     private TrellisHttpResource(final ServiceBundler trellis, final Config config) {
         this(trellis, TrellisExtensions.buildExtensionMapFromConfig(config),
-                config.getOptionalValue(CONFIG_HTTP_BASE_URL, String.class).orElse(null), config);
+                config.getOptionalValue(CONFIG_HTTP_BASE_URL, String.class).orElse(null));
     }
 
     /**
-     * Create a Trellis HTTP resource matcher.
+     * Create a Trellis HTTP resource handler.
      *
      * @param trellis the Trellis application bundle
      * @param extensions the extension graph mapping
      * @param baseUrl a base URL
      */
-    public TrellisHttpResource(final ServiceBundler trellis, final Map<String, IRI> extensions, final String baseUrl) {
-        this(trellis, extensions, baseUrl, getConfig());
-    }
-
-    private TrellisHttpResource(final ServiceBundler trellis, final Map<String, IRI> extensions, final String baseUrl,
-            final Config config) {
-        this.baseUrl = baseUrl;
+    public TrellisHttpResource(final ServiceBundler trellis, final Map<String, IRI> extensions,
+            final String baseUrl) {
+        final Config config = getConfig();
         this.trellis = trellis;
         this.extensions = extensions;
+        this.baseUrl = baseUrl;
         this.defaultJsonLdProfile = config.getOptionalValue(CONFIG_HTTP_JSONLD_PROFILE, String.class).orElse(null);
         this.weakEtags = config.getOptionalValue(CONFIG_HTTP_WEAK_ETAG, Boolean.class).orElse(Boolean.TRUE);
         this.includeMementoDates = config.getOptionalValue(CONFIG_HTTP_MEMENTO_HEADER_DATES, Boolean.class)
@@ -162,16 +119,8 @@ public class TrellisHttpResource {
     }
 
     /**
-     * Initialize the Trellis backend with a root container quads.
-     *
-     * @apiNote In a CDI context, this initialization step will be called automatically.
-     *          In a Java SE context, however, it may be necessary to invoke this method
-     *          in code, though a ResourceService implementation may still choose to
-     *          initialize itself independently of this method. In either case, if the
-     *          persistence backend has already been initialized with a root resource,
-     *          this method will make no changes to the storage layer.
+     * Initialize the Trellis backend with a root container and default ACL quads.
      */
-    @PostConstruct
     public void initialize() {
         final IRI root = rdf.createIRI(TRELLIS_DATA_PREFIX);
         try (final Dataset dataset = rdf.createDataset()) {
@@ -201,92 +150,47 @@ public class TrellisHttpResource {
      *
      * @implNote The Memento implemenation pattern exactly follows
      *           <a href="https://tools.ietf.org/html/rfc7089#section-4.2.1">section 4.2.1 of RFC 7089</a>.
-     * @param uriInfo the URI info
-     * @param headers the HTTP headers
-     * @param request the request
+     * @param ctx the request
      * @return the async response
      */
-    @GET
-    @Timed
-    @Operation(summary = "Get a linked data resource")
-    @APIResponses(
-        value = {
-            @APIResponse(
-                responseCode = "404",
-                description = "Missing resource"),
-            @APIResponse(
-                responseCode = "200",
-                description = "The linked data resource, serialized as Turtle",
-                content = @Content(mediaType = "text/turtle")),
-            @APIResponse(
-                responseCode = "200",
-                description = "The linked data resource, serialized as JSON-LD",
-                content = @Content(mediaType = "application/ld+json"))})
-    public CompletionStage<Response> getResource(@Context final Request request, @Context final UriInfo uriInfo,
-            @Context final HttpHeaders headers) {
-        return fetchResource(new TrellisRequest(request, uriInfo, headers))
-            .thenApply(ResponseBuilder::build).exceptionally(this::handleException);
+    public CompletionStage<TrellisResponse> getResource(final HttpRequestContext ctx) {
+        return fetchResource(new TrellisRequest(ctx))
+            .thenApply(TrellisResponse.Builder::build).exceptionally(this::handleException);
     }
 
     /**
      * Perform a HEAD operation on an LDP Resource.
      *
-     * @implNote The Memento implemenation pattern exactly follows
-     *           <a href="https://tools.ietf.org/html/rfc7089#section-4.2.1">section 4.2.1 of RFC 7089</a>.
-     * @param uriInfo the URI info
-     * @param headers the HTTP headers
-     * @param request the request
+     * @param ctx the request
      * @return the async response
      */
-    @HEAD
-    @Timed
-    @Operation(summary = "Get the headers for a linked data resource")
-    @APIResponse(description = "The headers for a linked data resource")
-    public CompletionStage<Response> getResourceHeaders(@Context final Request request, @Context final UriInfo uriInfo,
-            @Context final HttpHeaders headers) {
-        return fetchResource(new TrellisRequest(request, uriInfo, headers))
-            .thenApply(ResponseBuilder::build).exceptionally(this::handleException);
+    public CompletionStage<TrellisResponse> getResourceHeaders(final HttpRequestContext ctx) {
+        return fetchResource(new TrellisRequest(ctx))
+            .thenApply(TrellisResponse.Builder::build).exceptionally(this::handleException);
     }
 
     /**
      * Perform an OPTIONS operation on an LDP Resource.
      *
-     * @param uriInfo the URI info
-     * @param headers the HTTP headers
-     * @param request the request
+     * @param ctx the request
      * @return the async response
      */
-    @OPTIONS
-    @Timed
-    @Operation(summary = "Get the interaction options for a linked data resource")
-    @APIResponse(description = "The interaction options for a linked data resource")
-    public CompletionStage<Response> options(@Context final Request request, @Context final UriInfo uriInfo,
-            @Context final HttpHeaders headers) {
-        final TrellisRequest req = new TrellisRequest(request, uriInfo, headers);
+    public CompletionStage<TrellisResponse> options(final HttpRequestContext ctx) {
+        final TrellisRequest req = new TrellisRequest(ctx);
         final OptionsHandler optionsHandler = new OptionsHandler(req, trellis, extensions);
-        return supplyAsync(optionsHandler::ldpOptions).thenApply(ResponseBuilder::build)
+        return supplyAsync(optionsHandler::ldpOptions).thenApply(TrellisResponse.Builder::build)
             .exceptionally(this::handleException);
     }
 
     /**
      * Perform a PATCH operation on an LDP Resource.
      *
-     * @param uriInfo the URI info
-     * @param secContext the security context
-     * @param headers the HTTP headers
-     * @param request the request
+     * @param ctx the request
      * @param body the body
      * @return the async response
      */
-    @PATCH
-    @Timed
-    @Operation(summary = "Update a linked data resource")
-    public CompletionStage<Response> updateResource(@Context final Request request, @Context final UriInfo uriInfo,
-            @Context final HttpHeaders headers, @Context final SecurityContext secContext,
-            @RequestBody(description = "The update request for RDF resources, typically as SPARQL-Update",
-                         required = true,
-                         content = @Content(mediaType = "application/sparql-update")) final String body) {
-        final TrellisRequest req = new TrellisRequest(request, uriInfo, headers, secContext);
+    public CompletionStage<TrellisResponse> updateResource(final HttpRequestContext ctx, final String body) {
+        final TrellisRequest req = new TrellisRequest(ctx);
         final String urlBase = getBaseUrl(req);
         final IRI identifier = trellis.getResourceService().getResourceIdentifier(urlBase, req.getPath());
         final PatchHandler patchHandler = new PatchHandler(req, body, trellis, extensions, supportsCreateOnPatch,
@@ -294,51 +198,36 @@ public class TrellisHttpResource {
 
         return getParent(identifier).thenCombine(trellis.getResourceService().get(identifier), patchHandler::initialize)
             .thenCompose(patchHandler::updateResource).thenCompose(patchHandler::updateMemento)
-            .thenApply(ResponseBuilder::build).exceptionally(this::handleException);
+            .thenApply(TrellisResponse.Builder::build).exceptionally(this::handleException);
     }
 
     /**
      * Perform a DELETE operation on an LDP Resource.
      *
-     * @param uriInfo the URI info
-     * @param secContext the security context
-     * @param headers the HTTP headers
-     * @param request the request
+     * @param ctx the request
      * @return the async response
      */
-    @DELETE
-    @Timed
-    @Operation(summary = "Delete a linked data resource")
-    public CompletionStage<Response> deleteResource(@Context final Request request, @Context final UriInfo uriInfo,
-            @Context final HttpHeaders headers, @Context final SecurityContext secContext) {
-        final TrellisRequest req = new TrellisRequest(request, uriInfo, headers, secContext);
+    public CompletionStage<TrellisResponse> deleteResource(final HttpRequestContext ctx) {
+        final TrellisRequest req = new TrellisRequest(ctx);
         final String urlBase = getBaseUrl(req);
         final IRI identifier = trellis.getResourceService().getResourceIdentifier(urlBase, req.getPath());
         final DeleteHandler deleteHandler = new DeleteHandler(req, trellis, extensions, urlBase);
 
         return getParent(identifier)
             .thenCombine(trellis.getResourceService().get(identifier), deleteHandler::initialize)
-            .thenCompose(deleteHandler::deleteResource).thenApply(ResponseBuilder::build)
+            .thenCompose(deleteHandler::deleteResource).thenApply(TrellisResponse.Builder::build)
             .exceptionally(this::handleException);
     }
 
     /**
      * Perform a POST operation on a LDP Resource.
      *
-     * @param uriInfo the URI info
-     * @param secContext the security context
-     * @param headers the HTTP headers
-     * @param request the request
+     * @param ctx the request
      * @param body the body
      * @return the async response
      */
-    @POST
-    @Timed
-    @Operation(summary = "Create a linked data resource")
-    public CompletionStage<Response> createResource(@Context final Request request, @Context final UriInfo uriInfo,
-            @Context final HttpHeaders headers, @Context final SecurityContext secContext,
-            @RequestBody(description = "The new resource") final InputStream body) {
-        final TrellisRequest req = new TrellisRequest(request, uriInfo, headers, secContext);
+    public CompletionStage<TrellisResponse> createResource(final HttpRequestContext ctx, final InputStream body) {
+        final TrellisRequest req = new TrellisRequest(ctx);
         final String urlBase = getBaseUrl(req);
         final String path = req.getPath();
         final String identifier = getIdentifier(req);
@@ -351,26 +240,18 @@ public class TrellisHttpResource {
         return trellis.getResourceService().get(parent)
             .thenCombine(trellis.getResourceService().get(child), postHandler::initialize)
             .thenCompose(postHandler::createResource).thenCompose(postHandler::updateMemento)
-            .thenApply(ResponseBuilder::build).exceptionally(this::handleException);
+            .thenApply(TrellisResponse.Builder::build).exceptionally(this::handleException);
     }
 
     /**
      * Perform a PUT operation on a LDP Resource.
      *
-     * @param uriInfo the URI info
-     * @param secContext the security context
-     * @param headers the HTTP headers
-     * @param request the request
+     * @param ctx the request
      * @param body the body
      * @return the async response
      */
-    @PUT
-    @Timed
-    @Operation(summary = "Create or update a linked data resource")
-    public CompletionStage<Response> setResource(@Context final Request request, @Context final UriInfo uriInfo,
-            @Context final HttpHeaders headers, @Context final SecurityContext secContext,
-            @RequestBody(description = "The updated resource") final InputStream body) {
-        final TrellisRequest req = new TrellisRequest(request, uriInfo, headers, secContext);
+    public CompletionStage<TrellisResponse> setResource(final HttpRequestContext ctx, final InputStream body) {
+        final TrellisRequest req = new TrellisRequest(ctx);
         final String urlBase = getBaseUrl(req);
         final IRI identifier = trellis.getResourceService().getResourceIdentifier(urlBase, req.getPath());
         final PutHandler putHandler = new PutHandler(req, body, trellis, extensions, preconditionRequired,
@@ -378,7 +259,7 @@ public class TrellisHttpResource {
 
         return getParent(identifier).thenCombine(trellis.getResourceService().get(identifier), putHandler::initialize)
             .thenCompose(putHandler::setResource).thenCompose(putHandler::updateMemento)
-            .thenApply(ResponseBuilder::build).exceptionally(this::handleException);
+            .thenApply(TrellisResponse.Builder::build).exceptionally(this::handleException);
     }
 
     private CompletionStage<? extends Resource> getParent(final IRI identifier) {
@@ -390,7 +271,7 @@ public class TrellisHttpResource {
         return baseUrl != null ? baseUrl : req.getBaseUrl();
     }
 
-    private CompletionStage<ResponseBuilder> fetchResource(final TrellisRequest req) {
+    private CompletionStage<TrellisResponse.Builder> fetchResource(final TrellisRequest req) {
         final String urlBase = getBaseUrl(req);
         final IRI identifier = trellis.getResourceService().getResourceIdentifier(urlBase, req.getPath());
         final GetConfiguration config = new GetConfiguration(req.getVersion() != null,
@@ -411,7 +292,7 @@ public class TrellisHttpResource {
             return trellis.getResourceService().get(identifier)
                 .thenCombine(trellis.getMementoService().mementos(identifier), (res, mementos) -> {
                     if (MISSING_RESOURCE.equals(res)) {
-                        throw new NotFoundException();
+                        throw TrellisHttpException.notFound();
                     }
                     return new MementoResource(trellis, includeMementoDates).getTimeMapBuilder(mementos, req, urlBase);
                 });
@@ -422,7 +303,7 @@ public class TrellisHttpResource {
             return trellis.getMementoService().get(identifier, req.getDatetime().getInstant())
                 .thenCombine(trellis.getMementoService().mementos(identifier), (res, mementos) -> {
                     if (MISSING_RESOURCE.equals(res)) {
-                        throw new NotAcceptableException();
+                        throw TrellisHttpException.notAcceptable();
                     }
                     return new MementoResource(trellis, includeMementoDates).getTimeGateBuilder(mementos, req, urlBase);
                 });
@@ -444,23 +325,18 @@ public class TrellisHttpResource {
         return trellis.getResourceService().generateIdentifier();
     }
 
-    private Response handleException(final Throwable err) {
+    private TrellisResponse handleException(final Throwable err) {
         final Throwable cause = err.getCause();
         if (cause instanceof StorageConflictException) {
             LOGGER.debug("Storage conflict error: {}", err.getMessage());
             LOGGER.trace("Storage conflict error: ", err);
-            return Response.status(Response.Status.CONFLICT).build();
-        } else if (cause instanceof ClientErrorException) {
+            return TrellisResponse.status(HttpStatus.CONFLICT).build();
+        } else if (cause instanceof TrellisHttpException) {
             LOGGER.debug("Client error: {}", err.getMessage());
             LOGGER.trace("Client error: ", err);
-        } else if (cause instanceof RedirectionException) {
-            LOGGER.debug("Redirection: {}", err.getMessage());
-            LOGGER.trace("Redirection: ", err);
-        } else {
-            LOGGER.error("Error:", err);
+            return ((TrellisHttpException) cause).getResponse();
         }
-        return cause instanceof WebApplicationException
-                        ? ((WebApplicationException) cause).getResponse()
-                        : new WebApplicationException(err).getResponse();
+        LOGGER.error("Error:", err);
+        return TrellisResponse.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
     }
 }

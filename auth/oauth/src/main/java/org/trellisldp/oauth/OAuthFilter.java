@@ -17,11 +17,11 @@ package org.trellisldp.oauth;
 
 import static java.util.Arrays.asList;
 import static java.util.Arrays.stream;
+import static java.util.Collections.singletonList;
 import static java.util.Collections.unmodifiableSet;
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toSet;
-import static javax.ws.rs.Priorities.AUTHENTICATION;
-import static javax.ws.rs.core.HttpHeaders.AUTHORIZATION;
+import static org.trellisldp.common.TrellisResponse.AUTHORIZATION;
 import static org.eclipse.microprofile.config.ConfigProvider.getConfig;
 import static org.slf4j.LoggerFactory.getLogger;
 
@@ -31,24 +31,21 @@ import io.jsonwebtoken.security.SecurityException;
 import java.security.Principal;
 import java.util.Set;
 
-import javax.annotation.Priority;
-import javax.ws.rs.NotAuthorizedException;
-import javax.ws.rs.container.ContainerRequestContext;
-import javax.ws.rs.container.ContainerRequestFilter;
-import javax.ws.rs.core.SecurityContext;
-import javax.ws.rs.ext.Provider;
+import org.trellisldp.common.AuthContext;
 
 import org.eclipse.microprofile.config.Config;
 import org.slf4j.Logger;
+import org.trellisldp.common.AuthContext;
+import org.trellisldp.common.HttpRequestContext;
+import org.trellisldp.common.HttpRequestFilter;
+import org.trellisldp.common.TrellisHttpException;
 import org.trellisldp.common.TrellisRoles;
 
 /**
  * An OAuth authentication filter that processes JWT-based Bearer tokens
  * from an Authorization HTTP header.
  */
-@Provider
-@Priority(AUTHENTICATION)
-public class OAuthFilter implements ContainerRequestFilter {
+public class OAuthFilter implements HttpRequestFilter {
 
     /** The configuration key controlling the list of of admin WebID values. */
     public static final String CONFIG_AUTH_ADMIN_USERS = "trellis.auth.admin-users";
@@ -109,16 +106,16 @@ public class OAuthFilter implements ContainerRequestFilter {
     }
 
     @Override
-    public void filter(final ContainerRequestContext requestContext) {
+    public void filter(final HttpRequestContext requestContext) {
 
-        final SecurityContext securityContext = requestContext.getSecurityContext();
+        final AuthContext securityContext = requestContext.getAuthContext();
         final boolean secure = securityContext != null && securityContext.isSecure();
 
         final String token = getOAuthToken(requestContext);
         if (token != null) {
             final Principal principal = authenticate(token);
-            if (principal == null) throw new NotAuthorizedException(challenge);
-            requestContext.setSecurityContext(new OAuthSecurityContext(principal, admins, secure));
+            if (principal == null) throw TrellisHttpException.notAuthorized(singletonList(challenge));
+            requestContext.setAuthContext(new OAuthSecurityContext(principal, admins, secure));
         }
     }
 
@@ -133,7 +130,7 @@ public class OAuthFilter implements ContainerRequestFilter {
         return null;
     }
 
-    private String getOAuthToken(final ContainerRequestContext ctx) {
+    private String getOAuthToken(final HttpRequestContext ctx) {
         final String headerString = ctx.getHeaderString(AUTHORIZATION);
         if (headerString != null) {
             final String[] pair = headerString.split(" ", 2);
@@ -171,7 +168,7 @@ public class OAuthFilter implements ContainerRequestFilter {
         return stream(admins.split(",")).map(String::trim).collect(toSet());
     }
 
-    static final class OAuthSecurityContext implements SecurityContext {
+    static final class OAuthSecurityContext implements AuthContext {
         private final boolean secure;
         private final Principal principal;
         private final Set<String> admins;

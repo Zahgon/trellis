@@ -24,11 +24,7 @@ dependencies {
     implementation "com.fasterxml.jackson.core:jackson-databind"
     implementation "commons-codec:commons-codec:$commonsCodecVersion"
     implementation "commons-io:commons-io:$commonsIoVersion"
-    implementation "io.jsonwebtoken:jjwt-api:$jjwtVersion"
-    implementation "jakarta.ws.rs:jakarta.ws.rs-api:$jaxrsApiVersion"
     implementation "jakarta.xml.bind:jakarta.xml.bind-api:$jaxbApiVersion"
-    implementation "org.apache.commons:commons-text:$commonsTextVersion"
-    implementation "org.apache.jena:jena-arq:$jenaVersion"
     implementation "org.apache.jena:jena-commonsrdf:$jenaVersion"
     implementation("org.awaitility:awaitility:$awaitilityVersion") {
         exclude group: 'org.hamcrest', module: 'hamcrest-library'
@@ -36,7 +32,6 @@ dependencies {
     }
     implementation "org.eclipse.microprofile.config:microprofile-config-api"
     implementation "org.junit.jupiter:junit-jupiter-engine"
-    implementation "org.hamcrest:hamcrest:$hamcrestVersion"
     implementation "org.slf4j:slf4j-api:$slf4jVersion"
     implementation project(':trellis-api')
     implementation project(':trellis-jena')

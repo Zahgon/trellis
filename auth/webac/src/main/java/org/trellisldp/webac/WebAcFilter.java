@@ -22,18 +22,13 @@ import static java.util.Collections.singletonList;
 import static java.util.Objects.requireNonNull;
 import static java.util.function.Predicate.isEqual;
 import static java.util.stream.Collectors.toList;
-import static javax.ws.rs.HttpMethod.DELETE;
-import static javax.ws.rs.Priorities.AUTHORIZATION;
-import static javax.ws.rs.core.HttpHeaders.LINK;
-import static javax.ws.rs.core.Link.fromUri;
-import static javax.ws.rs.core.Response.Status.Family.SUCCESSFUL;
-import static javax.ws.rs.core.UriBuilder.fromPath;
 import static org.eclipse.microprofile.config.ConfigProvider.getConfig;
 import static org.slf4j.LoggerFactory.getLogger;
 import static org.trellisldp.api.TrellisUtils.TRELLIS_DATA_PREFIX;
 import static org.trellisldp.common.HttpConstants.CONFIG_HTTP_BASE_URL;
 import static org.trellisldp.common.HttpConstants.PREFER;
 import static org.trellisldp.common.Prefer.PREFER_REPRESENTATION;
+import static org.trellisldp.common.TrellisResponse.LINK;
 import static org.trellisldp.common.TrellisRequest.buildBaseUrl;
 import static org.trellisldp.vocabulary.Trellis.AnonymousAgent;
 import static org.trellisldp.vocabulary.Trellis.PreferAudit;
@@ -43,42 +38,31 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-import javax.annotation.Priority;
-import javax.inject.Inject;
-import javax.ws.rs.ForbiddenException;
-import javax.ws.rs.NotAuthorizedException;
-import javax.ws.rs.container.ContainerRequestContext;
-import javax.ws.rs.container.ContainerRequestFilter;
-import javax.ws.rs.container.ContainerResponseContext;
-import javax.ws.rs.container.ContainerResponseFilter;
-import javax.ws.rs.core.Link;
-import javax.ws.rs.ext.Provider;
-
 import org.apache.commons.rdf.api.IRI;
 import org.apache.commons.rdf.api.RDF;
 import org.eclipse.microprofile.config.Config;
-import org.eclipse.microprofile.metrics.annotation.Timed;
 import org.slf4j.Logger;
 import org.trellisldp.api.RDFFactory;
 import org.trellisldp.api.ResourceService;
 import org.trellisldp.api.Session;
 import org.trellisldp.common.HttpConstants;
+import org.trellisldp.common.HttpRequestContext;
 import org.trellisldp.common.HttpSession;
-import org.trellisldp.common.LdpResource;
+import org.trellisldp.common.LinkHeader;
 import org.trellisldp.common.Prefer;
+import org.trellisldp.common.TrellisHttpException;
+import org.trellisldp.common.TrellisResponse;
+import org.trellisldp.common.Uris;
 import org.trellisldp.vocabulary.ACL;
 
 /**
- * A {@link ContainerRequestFilter} that implements WebAC-based authorization.
+ * A filter that implements WebAC-based authorization.
  *
  * @see <a href="https://github.com/solid/web-access-control-spec">SOLID WebACL Specification</a>
  *
  * @author acoburn
  */
-@Provider
-@Priority(AUTHORIZATION)
-@LdpResource
-public class WebAcFilter implements ContainerRequestFilter, ContainerResponseFilter {
+public class WebAcFilter {
 
     /**
      * The configuration key controlling which WWW-Authenticate challenges are provided on 401 errors.
@@ -161,7 +145,6 @@ public class WebAcFilter implements ContainerRequestFilter, ContainerResponseFil
      * Set the access service.
      * @param accessService the access service
      */
-    @Inject
     public void setAccessService(final WebAcService accessService) {
         this.accessService = requireNonNull(accessService, "Access service may not be null!");
     }
@@ -170,7 +153,6 @@ public class WebAcFilter implements ContainerRequestFilter, ContainerResponseFil
      * Set the resource service.
      * @param resourceService the resource service
      */
-    @Inject
     public void setResourceService(final ResourceService resourceService) {
         this.resourceService = requireNonNull(resourceService, "Resource service may not be null!");
     }
@@ -191,14 +173,17 @@ public class WebAcFilter implements ContainerRequestFilter, ContainerResponseFil
         this.baseUrl = baseUrl;
     }
 
-    @Timed
-    @Override
-    public void filter(final ContainerRequestContext ctx) {
+    /**
+     * Check whether the agent behind a request may do what it asks.
+     *
+     * @param ctx the request
+     */
+    public void filter(final HttpRequestContext ctx) {
         if (!enabled) {
             return; // If WebAC is disabled then skip the checks
         }
 
-        final String path = ctx.getUriInfo().getPath();
+        final String path = ctx.getPath();
         final String base = getBaseUrl(ctx, baseUrl);
         final Session s = buildSession(ctx, baseUrl);
         final String method = ctx.getMethod();
@@ -210,7 +195,7 @@ public class WebAcFilter implements ContainerRequestFilter, ContainerResponseFil
         final Prefer prefer = Prefer.valueOf(ctx.getHeaderString(PREFER));
 
         // Control-level access
-        if (ctx.getUriInfo().getQueryParameters().getOrDefault(HttpConstants.EXT, emptyList())
+        if (ctx.getQueryParameters().getOrDefault(HttpConstants.EXT, emptyList())
                 .contains(HttpConstants.ACL) || reqAudit(prefer)) {
             verifyCanControl(modes.getAccessModes(), s, resourceIdentifier.getIRIString());
         // Everything else
@@ -227,23 +212,27 @@ public class WebAcFilter implements ContainerRequestFilter, ContainerResponseFil
         }
     }
 
-    @Override
-    public void filter(final ContainerRequestContext req, final ContainerResponseContext res) {
+    /**
+     * Add the links that say where the access controls of a resource live.
+     *
+     * @param req the request
+     * @param res the answer being built
+     */
+    public void filter(final HttpRequestContext req, final TrellisResponse res) {
         final Object sessionModes = req.getProperty(SESSION_WEBAC_MODES);
-        if (SUCCESSFUL.equals(res.getStatusInfo().getFamily()) && !DELETE.equals(req.getMethod())
+        if (res.isSuccessful() && !"DELETE".equals(req.getMethod())
                 && sessionModes instanceof AuthorizedModes) {
             final AuthorizedModes modes = (AuthorizedModes) sessionModes;
             if (modes.getAccessModes().contains(ACL.Control)) {
-                final boolean isAcl = req.getUriInfo().getQueryParameters()
+                final boolean isAcl = req.getQueryParameters()
                     .getOrDefault(HttpConstants.EXT, emptyList()).contains(HttpConstants.ACL);
                 final String rel = isAcl ? HttpConstants.ACL + " self" : HttpConstants.ACL;
-                final String path = req.getUriInfo().getPath();
-                res.getHeaders().add(LINK, fromUri(fromPath(path.startsWith(SLASH) ? path : SLASH + path)
-                            .queryParam(HttpConstants.EXT, HttpConstants.ACL).build()).rel(rel).build());
+                final String path = req.getPath();
+                res.getHeaders().add(LINK, LinkHeader.fromUri(aclUri(path.startsWith(SLASH) ? path : SLASH + path))
+                        .rel(rel).build().toString());
                 modes.getEffectiveAcl().map(IRI::getIRIString).map(acl -> effectiveAclToUrlPath(acl, path, res))
-                    .ifPresent(urlPath -> res.getHeaders().add(LINK, fromUri(fromPath(urlPath)
-                                .queryParam(HttpConstants.EXT, HttpConstants.ACL).build())
-                            .rel(effectiveAcl.getIRIString()).build()));
+                    .ifPresent(urlPath -> res.getHeaders().add(LINK, LinkHeader.fromUri(aclUri(urlPath))
+                            .rel(effectiveAcl.getIRIString()).build().toString()));
             }
         }
     }
@@ -252,10 +241,9 @@ public class WebAcFilter implements ContainerRequestFilter, ContainerResponseFil
         if (!modes.contains(ACL.Append) && !modes.contains(ACL.Write)) {
             LOGGER.debug("User: {} cannot Append to {}", session.getAgent(), path);
             if (AnonymousAgent.equals(session.getAgent())) {
-                throw new NotAuthorizedException(challenges.get(0),
-                        challenges.subList(1, challenges.size()).toArray());
+                throw TrellisHttpException.notAuthorized(challenges);
             }
-            throw new ForbiddenException();
+            throw TrellisHttpException.forbidden();
         }
         LOGGER.trace("User: {} can append to {}", session.getAgent(), path);
     }
@@ -264,10 +252,9 @@ public class WebAcFilter implements ContainerRequestFilter, ContainerResponseFil
         if (!modes.contains(ACL.Control)) {
             LOGGER.debug("User: {} cannot Control {}", session.getAgent(), path);
             if (AnonymousAgent.equals(session.getAgent())) {
-                throw new NotAuthorizedException(challenges.get(0),
-                        challenges.subList(1, challenges.size()).toArray());
+                throw TrellisHttpException.notAuthorized(challenges);
             }
-            throw new ForbiddenException();
+            throw TrellisHttpException.forbidden();
         }
         LOGGER.trace("User: {} can control {}", session.getAgent(), path);
     }
@@ -276,10 +263,9 @@ public class WebAcFilter implements ContainerRequestFilter, ContainerResponseFil
         if (!modes.contains(ACL.Write)) {
             LOGGER.debug("User: {} cannot Write to {}", session.getAgent(), path);
             if (AnonymousAgent.equals(session.getAgent())) {
-                throw new NotAuthorizedException(challenges.get(0),
-                        challenges.subList(1, challenges.size()).toArray());
+                throw TrellisHttpException.notAuthorized(challenges);
             }
-            throw new ForbiddenException();
+            throw TrellisHttpException.forbidden();
         }
         LOGGER.trace("User: {} can write to {}", session.getAgent(), path);
     }
@@ -288,10 +274,9 @@ public class WebAcFilter implements ContainerRequestFilter, ContainerResponseFil
         if (!modes.contains(ACL.Read)) {
             LOGGER.debug("User: {} cannot Read from {}", session.getAgent(), path);
             if (AnonymousAgent.equals(session.getAgent())) {
-                throw new NotAuthorizedException(challenges.get(0),
-                        challenges.subList(1, challenges.size()).toArray());
+                throw TrellisHttpException.notAuthorized(challenges);
             }
-            throw new ForbiddenException();
+            throw TrellisHttpException.forbidden();
         }
         LOGGER.trace("User: {} can read {}", session.getAgent(), path);
     }
@@ -304,15 +289,25 @@ public class WebAcFilter implements ContainerRequestFilter, ContainerResponseFil
         return prefer != null && prefer.getPreference().filter(isEqual(PREFER_REPRESENTATION)).isPresent();
     }
 
-    static String getBaseUrl(final ContainerRequestContext ctx, final String baseUrl) {
+    static String getBaseUrl(final HttpRequestContext ctx, final String baseUrl) {
         if (baseUrl != null) {
             return baseUrl;
         }
-        return buildBaseUrl(ctx.getUriInfo().getBaseUri(), ctx.getHeaders());
+        return buildBaseUrl(ctx.getBaseUri(), ctx.getHeaders());
     }
 
-    static Session buildSession(final ContainerRequestContext ctx, final String baseUrl) {
-        final Session session = HttpSession.from(ctx.getSecurityContext());
+    /**
+     * Build the URI of the access controls of a resource at a path.
+     *
+     * @param path the path of the resource
+     * @return the URI of its access controls
+     */
+    static java.net.URI aclUri(final String path) {
+        return Uris.queryParam(Uris.fromPath(path), HttpConstants.EXT, HttpConstants.ACL);
+    }
+
+    static Session buildSession(final HttpRequestContext ctx, final String baseUrl) {
+        final Session session = HttpSession.from(ctx.getAuthContext());
         final String context = getBaseUrl(ctx, baseUrl);
         if (session.getAgent().getIRIString().startsWith(context)) {
             final String path = session.getAgent().getIRIString().substring(context.length());
@@ -331,14 +326,14 @@ public class WebAcFilter implements ContainerRequestFilter, ContainerResponseFil
     }
 
     static String effectiveAclToUrlPath(final String effectiveAclPath, final String resourceAclPath,
-            final ContainerResponseContext response) {
+            final TrellisResponse response) {
 
         final String effectivePath = normalizePath(effectiveAclPath);
         final String resourcePath = normalizePath(resourceAclPath);
         final boolean inherited = ! effectivePath.equals(resourcePath);
-        final boolean isContainer = inherited || response.getStringHeaders().getOrDefault(LINK, emptyList()).stream()
-            .map(Link::valueOf).anyMatch(link ->
-                    link.getUri().toString().endsWith("Container") && link.getRels().contains(Link.TYPE));
+        final boolean isContainer = inherited || response.getHeaders().get(LINK).stream()
+            .map(LinkHeader::valueOf).anyMatch(link ->
+                    link.getUri().toString().endsWith("Container") && link.getRels().contains(LinkHeader.TYPE));
         if (SLASH.equals(effectivePath) || !isContainer) {
             return effectivePath;
         }

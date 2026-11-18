@@ -15,29 +15,23 @@
  */
 package org.trellisldp.http;
 
-import static javax.ws.rs.HttpMethod.GET;
-import static javax.ws.rs.HttpMethod.HEAD;
-import static javax.ws.rs.core.HttpHeaders.LINK;
-import static javax.ws.rs.core.Link.fromUri;
-import static javax.ws.rs.core.Response.Status.Family.SUCCESSFUL;
 import static org.eclipse.microprofile.config.ConfigProvider.getConfig;
+import static org.trellisldp.common.HttpConstants.GET;
+import static org.trellisldp.common.HttpConstants.HEAD;
+import static org.trellisldp.common.LinkHeader.fromUri;
+import static org.trellisldp.common.TrellisResponse.LINK;
 
-import javax.ws.rs.container.ContainerRequestContext;
-import javax.ws.rs.container.ContainerResponseContext;
-import javax.ws.rs.container.ContainerResponseFilter;
-import javax.ws.rs.ext.Provider;
-
-import org.trellisldp.common.LdpResource;
+import org.trellisldp.common.HttpRequestContext;
+import org.trellisldp.common.HttpResponseFilter;
+import org.trellisldp.common.TrellisResponse;
 
 /**
- * A {@link ContainerResponseFilter} that adds WebSub headers to all
+ * An {@link HttpResponseFilter} that adds WebSub headers to all
  * {@code GET} responses.
  *
  * @see <a href="https://www.w3.org/TR/websub/">WebSub</a>
  */
-@Provider
-@LdpResource
-public class WebSubHeaderFilter implements ContainerResponseFilter {
+public class WebSubHeaderFilter implements HttpResponseFilter {
 
     /** The configuration key controlling the location of a web-sub-hub. */
     public static final String CONFIG_HTTP_WEB_SUB_HUB = "trellis.http.web-sub-hub";
@@ -60,10 +54,10 @@ public class WebSubHeaderFilter implements ContainerResponseFilter {
     }
 
     @Override
-    public void filter(final ContainerRequestContext req, final ContainerResponseContext res) {
+    public void filter(final HttpRequestContext req, final TrellisResponse res) {
         if ((GET.equals(req.getMethod()) || HEAD.equals(req.getMethod()))
-                && SUCCESSFUL.equals(res.getStatusInfo().getFamily()) && hub != null) {
-            res.getHeaders().add(LINK, fromUri(hub).rel("hub").build());
+                && res.isSuccessful() && hub != null) {
+            res.getHeaders().add(LINK, fromUri(hub).rel("hub").build().toString());
         }
     }
 }

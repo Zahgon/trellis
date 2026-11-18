@@ -21,8 +21,8 @@ import static java.util.concurrent.CompletableFuture.completedFuture;
 import static java.util.function.Predicate.isEqual;
 import static java.util.stream.Collectors.toList;
 import static java.util.stream.Collectors.toSet;
-import static javax.ws.rs.core.Response.Status.CONFLICT;
-import static javax.ws.rs.core.Response.status;
+import static org.trellisldp.common.HttpStatus.CONFLICT;
+import static org.trellisldp.common.TrellisResponse.status;
 import static org.eclipse.microprofile.config.ConfigProvider.getConfig;
 import static org.slf4j.LoggerFactory.getLogger;
 import static org.trellisldp.common.HttpConstants.CONFIG_HTTP_VERSIONING;
@@ -38,10 +38,8 @@ import java.util.Set;
 import java.util.concurrent.CompletionStage;
 import java.util.stream.Stream;
 
-import javax.ws.rs.BadRequestException;
-import javax.ws.rs.ClientErrorException;
-import javax.ws.rs.core.Response.ResponseBuilder;
-import javax.ws.rs.core.StreamingOutput;
+import org.trellisldp.common.TrellisResponse;
+import org.trellisldp.common.StreamWriter;
 
 import org.apache.commons.rdf.api.Dataset;
 import org.apache.commons.rdf.api.Graph;
@@ -58,6 +56,9 @@ import org.trellisldp.api.Session;
 import org.trellisldp.api.TrellisRuntimeException;
 import org.trellisldp.api.TrellisUtils;
 import org.trellisldp.common.HttpSession;
+import org.trellisldp.common.StreamWriter;
+import org.trellisldp.common.TrellisHttpException;
+import org.trellisldp.common.TrellisResponse;
 import org.trellisldp.common.ServiceBundler;
 import org.trellisldp.common.SimpleEvent;
 import org.trellisldp.common.TrellisRequest;
@@ -139,7 +140,7 @@ class MutatingLdpHandler extends BaseLdpHandler {
      * @param builder the Trellis response builder
      * @return a response builder promise
      */
-    public CompletionStage<ResponseBuilder> updateMemento(final ResponseBuilder builder) {
+    public CompletionStage<TrellisResponse.Builder> updateMemento(final TrellisResponse.Builder builder) {
         if (versioningEnabled) {
             return getServices().getMementoService().put(getServices().getResourceService(), getInternalId())
                 .exceptionally(ex -> {
@@ -183,9 +184,9 @@ class MutatingLdpHandler extends BaseLdpHandler {
                         rdf.createQuad(graphName, triple.getSubject(), triple.getPredicate(), triple.getObject()))
                 .forEachOrdered(dataset::add);
         } catch (final IOException ex) {
-            throw new BadRequestException("Error handling input stream: " + ex.getMessage(), ex);
+            throw TrellisHttpException.badRequest("Error handling input stream: " + ex.getMessage());
         } catch (final TrellisRuntimeException ex) {
-            throw new BadRequestException("Invalid RDF content: " + ex.getMessage(), ex);
+            throw TrellisHttpException.badRequest("Invalid RDF content: " + ex.getMessage());
         }
     }
 
@@ -242,9 +243,9 @@ class MutatingLdpHandler extends BaseLdpHandler {
         getServices().getConstraintServices().forEach(svc -> svc.constrainedBy(getInternalId(), type, graph)
                 .forEach(violations::add));
         if (!violations.isEmpty()) {
-            final ResponseBuilder err = status(CONFLICT);
+            final TrellisResponse.Builder err = status(CONFLICT);
             violations.forEach(v -> err.link(v.getConstraint().getIRIString(), LDP.constrainedBy.getIRIString()));
-            throw new ClientErrorException(err.entity((StreamingOutput) out ->
+            throw new TrellisHttpException(err.entity((StreamWriter) out ->
                     getServices().getIOService().write(violations.stream().flatMap(v2 -> v2.getTriples().stream()),
                             out, syntax, getIdentifier())).type(syntax.mediaType()).build());
         }

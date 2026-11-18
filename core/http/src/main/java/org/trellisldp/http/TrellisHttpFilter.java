@@ -17,19 +17,13 @@ package org.trellisldp.http;
 
 import static java.util.Arrays.asList;
 import static java.util.Collections.singletonList;
-import static javax.ws.rs.HttpMethod.DELETE;
-import static javax.ws.rs.HttpMethod.GET;
-import static javax.ws.rs.HttpMethod.PATCH;
-import static javax.ws.rs.HttpMethod.POST;
-import static javax.ws.rs.HttpMethod.PUT;
-import static javax.ws.rs.Priorities.AUTHORIZATION;
-import static javax.ws.rs.core.HttpHeaders.LINK;
-import static javax.ws.rs.core.Response.Status.BAD_REQUEST;
-import static javax.ws.rs.core.Response.Status.METHOD_NOT_ALLOWED;
-import static javax.ws.rs.core.Response.status;
 import static org.eclipse.microprofile.config.ConfigProvider.getConfig;
 import static org.trellisldp.common.HttpConstants.*;
+import static org.trellisldp.common.HttpStatus.BAD_REQUEST;
+import static org.trellisldp.common.HttpStatus.METHOD_NOT_ALLOWED;
 import static org.trellisldp.common.TrellisExtensions.buildExtensionMapFromConfig;
+import static org.trellisldp.common.TrellisResponse.LINK;
+import static org.trellisldp.common.TrellisResponse.status;
 import static org.trellisldp.vocabulary.LDP.PreferContainment;
 import static org.trellisldp.vocabulary.LDP.PreferMembership;
 import static org.trellisldp.vocabulary.Trellis.PreferServerManaged;
@@ -38,25 +32,22 @@ import static org.trellisldp.vocabulary.Trellis.PreferUserManaged;
 import java.util.List;
 import java.util.Map;
 
-import javax.annotation.Priority;
-import javax.ws.rs.container.ContainerRequestContext;
-import javax.ws.rs.container.ContainerRequestFilter;
-import javax.ws.rs.core.Link;
-import javax.ws.rs.ext.Provider;
-
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.rdf.api.IRI;
 import org.eclipse.microprofile.config.Config;
 import org.trellisldp.common.AcceptDatetime;
-import org.trellisldp.common.LdpResource;
+import org.trellisldp.common.HttpRequestContext;
+import org.trellisldp.common.HttpRequestFilter;
+import org.trellisldp.common.LinkHeader;
 import org.trellisldp.common.Prefer;
 import org.trellisldp.common.Range;
 import org.trellisldp.common.Version;
 
-@Provider
-@Priority(AUTHORIZATION - 20)
-@LdpResource
-public class TrellisHttpFilter implements ContainerRequestFilter {
+/**
+ * A request filter that rejects what the LDP layer cannot act on, and that turns an extension
+ * request into the {@code Prefer} header the handler reads.
+ */
+public class TrellisHttpFilter implements HttpRequestFilter {
 
     private final String invalidChars;
 
@@ -91,7 +82,7 @@ public class TrellisHttpFilter implements ContainerRequestFilter {
     }
 
     @Override
-    public void filter(final ContainerRequestContext ctx) {
+    public void filter(final HttpRequestContext ctx) {
         // Validate path
         validatePath(ctx);
         // Validate headers
@@ -103,7 +94,7 @@ public class TrellisHttpFilter implements ContainerRequestFilter {
         validateTimeMap(ctx);
 
         // Unconditionally set the Prefer header for extension requests
-        final String ext = ctx.getUriInfo().getQueryParameters().getFirst(EXT);
+        final String ext = ctx.getQueryParameters().getFirst(EXT);
         if (ext != null && extensions.containsKey(ext) && GET.equals(ctx.getMethod())) {
             ctx.getHeaders().putSingle(PREFER, new Prefer(Prefer.PREFER_REPRESENTATION,
                         singletonList(extensions.get(ext).getIRIString()),
@@ -112,40 +103,40 @@ public class TrellisHttpFilter implements ContainerRequestFilter {
         }
     }
 
-    private void validatePath(final ContainerRequestContext ctx) {
-        final String path = ctx.getUriInfo().getPath();
+    private void validatePath(final HttpRequestContext ctx) {
+        final String path = ctx.getPath();
         if (StringUtils.containsAny(path, invalidChars)) {
             ctx.abortWith(status(BAD_REQUEST).build());
         }
     }
 
-    private void validateAcceptDatetime(final ContainerRequestContext ctx) {
+    private void validateAcceptDatetime(final HttpRequestContext ctx) {
         final String acceptDatetime = ctx.getHeaderString(ACCEPT_DATETIME);
         if (acceptDatetime != null && AcceptDatetime.valueOf(acceptDatetime) == null) {
             ctx.abortWith(status(BAD_REQUEST).build());
         }
     }
 
-    private void validateRange(final ContainerRequestContext ctx) {
+    private void validateRange(final HttpRequestContext ctx) {
         final String range = ctx.getHeaderString(RANGE);
         if (range != null && Range.valueOf(range) == null) {
             ctx.abortWith(status(BAD_REQUEST).build());
         }
     }
 
-    private void validateLink(final ContainerRequestContext ctx) {
+    private void validateLink(final HttpRequestContext ctx) {
         final String link = ctx.getHeaderString(LINK);
         if (link != null) {
             try {
-                Link.valueOf(link);
+                LinkHeader.valueOf(link);
             } catch (final IllegalArgumentException ex) {
                 ctx.abortWith(status(BAD_REQUEST).build());
             }
         }
     }
 
-    private void validateVersion(final ContainerRequestContext ctx) {
-        final String version = ctx.getUriInfo().getQueryParameters().getFirst("version");
+    private void validateVersion(final HttpRequestContext ctx) {
+        final String version = ctx.getQueryParameters().getFirst("version");
         if (version != null) {
             // Check well-formedness
             if (Version.valueOf(version) == null) {
@@ -157,10 +148,10 @@ public class TrellisHttpFilter implements ContainerRequestFilter {
         }
     }
 
-    private void validateTimeMap(final ContainerRequestContext ctx) {
-        final List<String> exts = ctx.getUriInfo().getQueryParameters().get(EXT);
+    private void validateTimeMap(final HttpRequestContext ctx) {
+        final List<String> exts = ctx.getQueryParameters().get(EXT);
         // Do not allow direct manipulation of timemaps
-        if (exts != null && exts.contains(TIMEMAP) && mutatingMethods.contains(ctx.getMethod())) {
+        if (exts.contains(TIMEMAP) && mutatingMethods.contains(ctx.getMethod())) {
             ctx.abortWith(status(METHOD_NOT_ALLOWED).build());
         }
     }

@@ -17,11 +17,11 @@ package org.trellisldp.http.impl;
 
 import static java.util.concurrent.CompletableFuture.allOf;
 import static java.util.concurrent.CompletableFuture.completedFuture;
-import static javax.ws.rs.core.MediaType.TEXT_PLAIN_TYPE;
-import static javax.ws.rs.core.Response.Status.BAD_REQUEST;
-import static javax.ws.rs.core.Response.Status.GONE;
-import static javax.ws.rs.core.Response.noContent;
-import static javax.ws.rs.core.Response.status;
+import static org.trellisldp.common.MediaType.TEXT_PLAIN;
+import static org.trellisldp.common.HttpStatus.BAD_REQUEST;
+import static org.trellisldp.common.HttpStatus.GONE;
+import static org.trellisldp.common.TrellisResponse.noContent;
+import static org.trellisldp.common.TrellisResponse.status;
 import static org.eclipse.microprofile.config.ConfigProvider.getConfig;
 import static org.slf4j.LoggerFactory.getLogger;
 import static org.trellisldp.api.Resource.SpecialResources.DELETED_RESOURCE;
@@ -35,9 +35,7 @@ import java.util.Map;
 import java.util.concurrent.CompletionStage;
 import java.util.stream.Stream;
 
-import javax.ws.rs.ClientErrorException;
-import javax.ws.rs.NotFoundException;
-import javax.ws.rs.core.Response.ResponseBuilder;
+import org.trellisldp.common.TrellisResponse;
 
 import org.apache.commons.rdf.api.Dataset;
 import org.apache.commons.rdf.api.IRI;
@@ -47,6 +45,7 @@ import org.trellisldp.api.BinaryMetadata;
 import org.trellisldp.api.Metadata;
 import org.trellisldp.api.Resource;
 import org.trellisldp.common.ServiceBundler;
+import org.trellisldp.common.TrellisHttpException;
 import org.trellisldp.common.TrellisRequest;
 import org.trellisldp.vocabulary.AS;
 import org.trellisldp.vocabulary.LDP;
@@ -88,19 +87,19 @@ public class DeleteHandler extends MutatingLdpHandler {
      * @param resource the Trellis resource
      * @return a response builder
      */
-    public ResponseBuilder initialize(final Resource parent, final Resource resource) {
+    public TrellisResponse.Builder initialize(final Resource parent, final Resource resource) {
 
         // Check that the persistence layer supports LDP-R
         if (MISSING_RESOURCE.equals(resource)) {
             // Can't delete a non-existent resources
-            throw new NotFoundException();
+            throw TrellisHttpException.notFound();
         } else if (DELETED_RESOURCE.equals(resource)) {
             // Can't delete a non-existent resources
-            throw new ClientErrorException(GONE);
+            throw TrellisHttpException.gone();
         } else if (!supportsInteractionModel(LDP.Resource)) {
-            throw new ClientErrorException(status(BAD_REQUEST)
+            throw new TrellisHttpException(status(BAD_REQUEST)
                 .link(UnsupportedInteractionModel.getIRIString(), LDP.constrainedBy.getIRIString())
-                .entity("Unsupported interaction model provided").type(TEXT_PLAIN_TYPE).build());
+                .entity("Unsupported interaction model provided").type(TEXT_PLAIN).build());
         }
 
         // Check the cache
@@ -117,7 +116,7 @@ public class DeleteHandler extends MutatingLdpHandler {
      * @param builder the Trellis response builder
      * @return a response builder promise
      */
-    public CompletionStage<ResponseBuilder> deleteResource(final ResponseBuilder builder) {
+    public CompletionStage<TrellisResponse.Builder> deleteResource(final TrellisResponse.Builder builder) {
 
         LOGGER.debug("Deleting {}", getIdentifier());
 

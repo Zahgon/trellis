@@ -16,12 +16,12 @@
 package org.trellisldp.auth.basic;
 
 import static java.util.Arrays.stream;
+import static java.util.Collections.singletonList;
 import static java.util.Collections.unmodifiableSet;
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toSet;
-import static javax.ws.rs.Priorities.AUTHENTICATION;
-import static javax.ws.rs.core.HttpHeaders.AUTHORIZATION;
-import static javax.ws.rs.core.SecurityContext.BASIC_AUTH;
+import static org.trellisldp.common.TrellisResponse.AUTHORIZATION;
+import static org.trellisldp.common.AuthContext.BASIC_AUTH;
 import static org.eclipse.microprofile.config.ConfigProvider.getConfig;
 
 import java.io.File;
@@ -30,22 +30,19 @@ import java.security.Principal;
 import java.util.Set;
 import java.util.stream.Stream;
 
-import javax.annotation.Priority;
-import javax.ws.rs.NotAuthorizedException;
-import javax.ws.rs.container.ContainerRequestContext;
-import javax.ws.rs.container.ContainerRequestFilter;
-import javax.ws.rs.core.SecurityContext;
-import javax.ws.rs.ext.Provider;
+import org.trellisldp.common.AuthContext;
 
 import org.eclipse.microprofile.config.Config;
+import org.trellisldp.common.AuthContext;
+import org.trellisldp.common.HttpRequestContext;
+import org.trellisldp.common.HttpRequestFilter;
+import org.trellisldp.common.TrellisHttpException;
 import org.trellisldp.common.TrellisRoles;
 
 /**
  * A basic authentication filter using an Authorization HTTP header.
  */
-@Provider
-@Priority(AUTHENTICATION)
-public class BasicAuthFilter implements ContainerRequestFilter {
+public class BasicAuthFilter implements HttpRequestFilter {
 
     /** The configuration key controlling the location of the basic auth credentials file. */
     public static final String CONFIG_AUTH_BASIC_CREDENTIALS = "trellis.auth.basic.credentials";
@@ -97,16 +94,16 @@ public class BasicAuthFilter implements ContainerRequestFilter {
     }
 
     @Override
-    public void filter(final ContainerRequestContext requestContext) {
+    public void filter(final HttpRequestContext requestContext) {
 
-        final boolean secure = requestContext.getSecurityContext() != null
-            && requestContext.getSecurityContext().isSecure();
+        final boolean secure = requestContext.getAuthContext() != null
+            && requestContext.getAuthContext().isSecure();
 
         final String credentials = getCredentials(requestContext);
         if (credentials != null) {
             final Principal principal = authenticate(credentials);
-            if (principal == null) throw new NotAuthorizedException(challenge);
-            requestContext.setSecurityContext(new BasicAuthSecurityContext(principal, admins, secure));
+            if (principal == null) throw TrellisHttpException.notAuthorized(singletonList(challenge));
+            requestContext.setAuthContext(new BasicAuthSecurityContext(principal, admins, secure));
         }
     }
 
@@ -124,7 +121,7 @@ public class BasicAuthFilter implements ContainerRequestFilter {
         return null;
     }
 
-    private String getCredentials(final ContainerRequestContext ctx) {
+    private String getCredentials(final HttpRequestContext ctx) {
         final String authHeader = ctx.getHeaderString(AUTHORIZATION);
         if (authHeader != null) {
             final String[] pair = authHeader.split(" ", 2);
@@ -142,7 +139,7 @@ public class BasicAuthFilter implements ContainerRequestFilter {
         return stream(admins.split(",")).map(String::trim).collect(toSet());
     }
 
-    static final class BasicAuthSecurityContext implements SecurityContext {
+    static final class BasicAuthSecurityContext implements AuthContext {
         private final Principal principal;
         private final Set<String> admins;
         private final boolean secure;

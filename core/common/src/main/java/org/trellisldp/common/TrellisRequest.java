@@ -17,24 +17,15 @@ package org.trellisldp.common;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Collections.emptyList;
-import static javax.ws.rs.core.HttpHeaders.CONTENT_TYPE;
-import static javax.ws.rs.core.HttpHeaders.LINK;
 import static org.eclipse.microprofile.config.ConfigProvider.getConfig;
 import static org.trellisldp.common.HttpConstants.*;
+import static org.trellisldp.common.TrellisResponse.CONTENT_TYPE;
+import static org.trellisldp.common.TrellisResponse.LINK;
 
 import java.net.URI;
 import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.List;
-
-import javax.ws.rs.core.HttpHeaders;
-import javax.ws.rs.core.Link;
-import javax.ws.rs.core.MediaType;
-import javax.ws.rs.core.MultivaluedMap;
-import javax.ws.rs.core.Request;
-import javax.ws.rs.core.SecurityContext;
-import javax.ws.rs.core.UriBuilder;
-import javax.ws.rs.core.UriInfo;
 
 import org.apache.commons.lang3.StringUtils;
 import org.trellisldp.vocabulary.LDP;
@@ -57,43 +48,44 @@ public class TrellisRequest {
     private final String method;
     private final List<MediaType> acceptableMediaTypes;
 
-    private final MultivaluedMap<String, String> headers;
-    private final MultivaluedMap<String, String> parameters;
-    private final SecurityContext secCtx;
+    private final Headers headers;
+    private final Headers parameters;
+    private final AuthContext secCtx;
 
     /**
      * Bundle together some request contexts.
-     * @param request the Request object
-     * @param uriInfo the URI information
-     * @param headers the HTTP headers
+     * @param ctx the request context
      */
-    public TrellisRequest(final Request request, final UriInfo uriInfo, final HttpHeaders headers) {
-        this(request, uriInfo, headers, null);
+    public TrellisRequest(final HttpRequestContext ctx) {
+        this(ctx, ctx.getAuthContext());
     }
 
     /**
      * Bundle together some request contexts.
-     * @param request the Request object
-     * @param uriInfo the URI information
-     * @param headers the HTTP headers
+     * @param ctx the request context
      * @param secCtx the security context
      */
-    public TrellisRequest(final Request request, final UriInfo uriInfo, final HttpHeaders headers,
-            final SecurityContext secCtx) {
+    public TrellisRequest(final HttpRequestContext ctx, final AuthContext secCtx) {
         // Extract header values
-        this.headers = headers.getRequestHeaders();
-        this.acceptableMediaTypes = headers.getAcceptableMediaTypes();
+        this.headers = ctx.getHeaders();
+        this.acceptableMediaTypes = ctx.getAcceptableMediaTypes();
 
         // Extract URI values
-        this.parameters = uriInfo.getQueryParameters();
-        this.baseUrl = buildBaseUrl(uriInfo.getBaseUri(), this.headers);
-        this.trailingSlash = uriInfo.getPath().endsWith("/");
+        this.parameters = ctx.getQueryParameters();
+        this.baseUrl = buildBaseUrl(ctx.getBaseUri(), this.headers);
+        this.trailingSlash = ctx.getPath().endsWith("/");
 
-        final String urlPath = uriInfo.getPathParameters().getFirst("path");
-        this.path = StringUtils.replaceEach(urlPath, ESCAPE_SEARCH, ESCAPE_REPLACE);
+        // The parameters that trail a path segment say something about how to reach the resource
+        // rather than naming it, so the resource's path is the path without them.
+        // The parameters that trail a segment are dropped from the target as it was written, so
+        // that a semicolon a client wrote as an escape stays part of the resource's name.
+        final String written = Uris.stripMatrixParameters(ctx.getRawPath());
+        this.path = StringUtils.replaceEach(
+                Uris.decode(written.startsWith("/") ? written.substring(1) : written),
+                ESCAPE_SEARCH, ESCAPE_REPLACE);
 
         // Extract request method
-        this.method = request.getMethod();
+        this.method = ctx.getMethod();
 
         // Security context value
         this.secCtx = secCtx;
@@ -126,10 +118,10 @@ public class TrellisRequest {
      *
      * @return the first LDP Link header
      */
-    public Link getLink() {
+    public LinkHeader getLink() {
         for (final String header : headers.getOrDefault(LINK, emptyList())) {
-            final Link link = Link.valueOf(header);
-            if (Link.TYPE.equals(link.getRel())) {
+            final LinkHeader link = LinkHeader.valueOf(header);
+            if (LinkHeader.TYPE.equals(link.getRel())) {
                 final String uri = link.getUri().toString();
                 if (uri.startsWith(LDP.getNamespace()) && !uri.equals(LDP.Resource.getIRIString())) {
                     return link;
@@ -223,7 +215,7 @@ public class TrellisRequest {
      *
      * @return the security context
      */
-    public SecurityContext getSecurityContext() {
+    public AuthContext getSecurityContext() {
         return secCtx;
     }
 
@@ -239,38 +231,72 @@ public class TrellisRequest {
      * Get all of the headers.
      * @return the headers
      */
-    public MultivaluedMap<String, String> getHeaders() {
+    public Headers getHeaders() {
         return headers;
     }
 
     /**
-     * Get the HTTP headers.
+     * Get the media types that the client will accept, in the order it prefers them.
      *
-     * @return the http headers
+     * @return the acceptable media types
      */
     public List<MediaType> getAcceptableMediaTypes() {
         return acceptableMediaTypes;
     }
 
-    public static String buildBaseUrl(final URI uri, final MultivaluedMap<String, String> headers) {
+    /**
+     * Build the base URL a request is answered against, honouring any forwarding headers.
+     *
+     * @param uri the base URI the connection carried
+     * @param headers the request headers
+     * @return the base URL
+     */
+    public static String buildBaseUrl(final URI uri, final Headers headers) {
         // Start with the baseURI from the request
-        final UriBuilder builder = UriBuilder.fromUri(uri);
+        String scheme = uri.getScheme();
+        String host = uri.getHost();
+        int port = uri.getPort();
 
         // Adjust the protocol, using the non-spec X-Forwarded-* header, if present
         final Forwarded nonSpec = new Forwarded(null, headers.getFirst("X-Forwarded-For"),
                 headers.getFirst("X-Forwarded-Host"), headers.getFirst("X-Forwarded-Proto"));
-        nonSpec.getHostname().ifPresent(builder::host);
-        nonSpec.getPort().ifPresent(builder::port);
-        nonSpec.getProto().ifPresent(builder::scheme);
+        if (nonSpec.getHostname().isPresent()) {
+            host = nonSpec.getHostname().get();
+        }
+        if (nonSpec.getPort().isPresent()) {
+            port = nonSpec.getPort().getAsInt();
+        }
+        if (nonSpec.getProto().isPresent()) {
+            scheme = nonSpec.getProto().get();
+        }
 
         // The standard Forwarded header overrides these values
         final Forwarded forwarded = Forwarded.valueOf(headers.getFirst("Forwarded"));
         if (forwarded != null) {
-            forwarded.getHostname().ifPresent(builder::host);
-            forwarded.getPort().ifPresent(builder::port);
-            forwarded.getProto().ifPresent(builder::scheme);
+            if (forwarded.getHostname().isPresent()) {
+                host = forwarded.getHostname().get();
+            }
+            if (forwarded.getPort().isPresent()) {
+                port = forwarded.getPort().getAsInt();
+            }
+            if (forwarded.getProto().isPresent()) {
+                scheme = forwarded.getProto().get();
+            }
         }
-        return builder.build().toString();
+
+        if (host == null || host.isEmpty()) {
+            // A proxy that names the authority as nothing leaves no base URL to answer against,
+            // and the service says so about itself rather than about the request.
+            throw new IllegalStateException("The authority the request was made to is empty");
+        }
+        // What was written as the authority may be something no authority may carry - a proxy that
+        // names two of them, say - and the base URL is a URI either way.
+        final StringBuilder builder = new StringBuilder(scheme).append("://")
+            .append(Uris.encodeAuthority(host));
+        if (port >= 0) {
+            builder.append(':').append(port);
+        }
+        return builder.append(uri.getRawPath()).toString();
     }
 
     static String[] getSearchArray(final String escapeChars) {

@@ -15,14 +15,14 @@
  */
 package org.trellisldp.http.impl;
 
-import static javax.ws.rs.core.HttpHeaders.IF_MATCH;
-import static javax.ws.rs.core.HttpHeaders.IF_UNMODIFIED_SINCE;
-import static javax.ws.rs.core.MediaType.APPLICATION_OCTET_STREAM;
-import static javax.ws.rs.core.Response.Status.BAD_REQUEST;
-import static javax.ws.rs.core.Response.Status.CONFLICT;
-import static javax.ws.rs.core.Response.Status.CREATED;
-import static javax.ws.rs.core.Response.Status.NO_CONTENT;
-import static javax.ws.rs.core.Response.status;
+import static org.trellisldp.common.TrellisResponse.IF_MATCH;
+import static org.trellisldp.common.TrellisResponse.IF_UNMODIFIED_SINCE;
+import static org.trellisldp.common.MediaType.APPLICATION_OCTET_STREAM;
+import static org.trellisldp.common.HttpStatus.BAD_REQUEST;
+import static org.trellisldp.common.HttpStatus.CONFLICT;
+import static org.trellisldp.common.HttpStatus.CREATED;
+import static org.trellisldp.common.HttpStatus.NO_CONTENT;
+import static org.trellisldp.common.TrellisResponse.status;
 import static org.apache.commons.rdf.api.RDFSyntax.TURTLE;
 import static org.eclipse.microprofile.config.ConfigProvider.getConfig;
 import static org.slf4j.LoggerFactory.getLogger;
@@ -36,19 +36,16 @@ import static org.trellisldp.vocabulary.Trellis.PreferUserManaged;
 import static org.trellisldp.vocabulary.Trellis.UnsupportedInteractionModel;
 
 import java.io.InputStream;
+import java.net.URI;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletionStage;
 import java.util.stream.Stream;
 
-import javax.ws.rs.BadRequestException;
-import javax.ws.rs.ClientErrorException;
-import javax.ws.rs.NotAcceptableException;
-import javax.ws.rs.core.Link;
-import javax.ws.rs.core.MediaType;
-import javax.ws.rs.core.Response.ResponseBuilder;
-import javax.ws.rs.core.UriBuilder;
+import org.trellisldp.common.LinkHeader;
+import org.trellisldp.common.MediaType;
+import org.trellisldp.common.TrellisResponse;
 
 import org.apache.commons.rdf.api.Dataset;
 import org.apache.commons.rdf.api.IRI;
@@ -59,6 +56,8 @@ import org.trellisldp.api.BinaryMetadata;
 import org.trellisldp.api.Metadata;
 import org.trellisldp.api.Resource;
 import org.trellisldp.common.ServiceBundler;
+import org.trellisldp.common.Uris;
+import org.trellisldp.common.TrellisHttpException;
 import org.trellisldp.common.TrellisRequest;
 import org.trellisldp.vocabulary.AS;
 import org.trellisldp.vocabulary.LDP;
@@ -110,7 +109,7 @@ public class PutHandler extends MutatingLdpHandler {
      * @param resource the resource
      * @return the response builder
      */
-    public ResponseBuilder initialize(final Resource parent, final Resource resource) {
+    public TrellisResponse.Builder initialize(final Resource parent, final Resource resource) {
         setResource(exists(resource) ? resource : null);
 
         // Check the cache
@@ -125,7 +124,7 @@ public class PutHandler extends MutatingLdpHandler {
 
         // One cannot put binaries into extension graphs
         if (getExtensionGraphName() != null && rdfSyntax == null) {
-            throw new NotAcceptableException();
+            throw TrellisHttpException.notAcceptable();
         }
 
         // For operations that modify resources, the parent resource may need to be updated via
@@ -146,14 +145,14 @@ public class PutHandler extends MutatingLdpHandler {
      * @param builder the response builder
      * @return the response builder
      */
-    public CompletionStage<ResponseBuilder> setResource(final ResponseBuilder builder) {
+    public CompletionStage<TrellisResponse.Builder> setResource(final TrellisResponse.Builder builder) {
         LOGGER.debug("Setting resource as {}", getIdentifier());
 
         final IRI ldpType = getLdpType();
 
         // Verify that the persistence layer supports the given interaction model
         if (!supportsInteractionModel(ldpType)) {
-            throw new BadRequestException("Unsupported interaction model provided",
+            throw new TrellisHttpException("Unsupported interaction model provided",
                     status(BAD_REQUEST).link(UnsupportedInteractionModel.getIRIString(),
                         LDP.constrainedBy.getIRIString()).build());
         }
@@ -161,7 +160,7 @@ public class PutHandler extends MutatingLdpHandler {
         // It is not possible to change the LDP type to a type that is not a subclass
         if (hasInteractionModelChangeRestriction(ldpType)) {
             LOGGER.error("Cannot change the LDP type to {} for {}", ldpType, getIdentifier());
-            throw new ClientErrorException("Cannot change the LDP type to " + ldpType, status(CONFLICT).build());
+            throw new TrellisHttpException("Cannot change the LDP type to " + ldpType, status(CONFLICT).build());
         }
 
         LOGGER.debug("Using LDP Type: {}", ldpType);
@@ -211,7 +210,7 @@ public class PutHandler extends MutatingLdpHandler {
         if (!supportsLdpTypeModifications && getResource() != null) {
             return getResource().getInteractionModel();
         }
-        final Link link = getRequest().getLink();
+        final LinkHeader link = getRequest().getLink();
         if (link != null) {
             return rdf.createIRI(link.getUri().toString());
         }
@@ -221,8 +220,8 @@ public class PutHandler extends MutatingLdpHandler {
         return heuristicType;
     }
 
-    private CompletionStage<ResponseBuilder> handleResourceUpdate(final Dataset mutable,
-            final Dataset immutable, final ResponseBuilder builder, final IRI ldpType) {
+    private CompletionStage<TrellisResponse.Builder> handleResourceUpdate(final Dataset mutable,
+            final Dataset immutable, final TrellisResponse.Builder builder, final IRI ldpType) {
 
         final Metadata.Builder metadata;
         final BinaryMetadata binary;
@@ -235,7 +234,7 @@ public class PutHandler extends MutatingLdpHandler {
             final IRI binaryLocation = rdf.createIRI(getServices().getBinaryService().generateIdentifier(internalId));
 
             binary = BinaryMetadata.builder(binaryLocation).mimeType(mimeType)
-                            .hints(getRequest().getHeaders()).build();
+                            .hints(getRequest().getHeaders().asMap()).build();
 
             metadata = metadataBuilder(internalId, ldpType, mutable).binary(binary);
             builder.link(getIdentifier() + "?ext=description", "describedby");
@@ -271,7 +270,7 @@ public class PutHandler extends MutatingLdpHandler {
 
         ldpResourceTypes(effectiveLdpType(ldpType)).map(IRI::getIRIString).forEach(type -> {
                 LOGGER.trace("Adding link for type {}", type);
-                builder.link(type, Link.TYPE);
+                builder.link(type, LinkHeader.TYPE);
             });
         LOGGER.trace("Persisting mutable data for {} with data: {}", internalId, mutable);
 
@@ -292,9 +291,9 @@ public class PutHandler extends MutatingLdpHandler {
         LOGGER.trace("Successfully checked for constraint violations");
     }
 
-    private ResponseBuilder decorateResponse(final ResponseBuilder builder) {
+    private TrellisResponse.Builder decorateResponse(final TrellisResponse.Builder builder) {
         if (getResource() == null) {
-            return builder.status(CREATED).contentLocation(UriBuilder.fromUri(getIdentifier()).build());
+            return builder.status(CREATED).contentLocation(Uris.parse(getIdentifier()));
         }
         return builder;
     }

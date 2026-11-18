@@ -21,10 +21,7 @@ import static java.time.temporal.ChronoUnit.SECONDS;
 import static java.util.Arrays.stream;
 import static java.util.function.Predicate.isEqual;
 import static java.util.stream.Collectors.toSet;
-import static javax.ws.rs.core.Response.Status.PRECONDITION_FAILED;
-import static javax.ws.rs.core.Response.notModified;
-import static javax.ws.rs.core.Response.status;
-import static javax.ws.rs.core.UriBuilder.fromUri;
+import static org.trellisldp.common.HttpStatus.PRECONDITION_FAILED;
 import static org.apache.commons.lang3.StringUtils.strip;
 import static org.apache.commons.rdf.api.RDFSyntax.RDFA;
 import static org.apache.commons.rdf.api.RDFSyntax.TURTLE;
@@ -42,12 +39,11 @@ import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
-import javax.ws.rs.BadRequestException;
-import javax.ws.rs.ClientErrorException;
-import javax.ws.rs.NotAcceptableException;
-import javax.ws.rs.RedirectionException;
-import javax.ws.rs.core.EntityTag;
-import javax.ws.rs.core.MediaType;
+import org.trellisldp.common.EntityTag;
+import org.trellisldp.common.TrellisHttpException;
+import org.trellisldp.common.TrellisResponse;
+import org.trellisldp.common.Uris;
+import org.trellisldp.common.MediaType;
 
 import org.apache.commons.rdf.api.BlankNodeOrIRI;
 import org.apache.commons.rdf.api.Dataset;
@@ -177,7 +173,7 @@ public final class HttpUtils {
      * @param acceptableTypes the types from HTTP headers
      * @param mimeType an additional "default" mimeType to match
      * @return an RDFSyntax or, in the case of binaries, null
-     * @throws NotAcceptableException if no acceptable syntax is available
+     * @throws TrellisHttpException if no acceptable syntax is available
      */
     public static RDFSyntax getSyntax(final IOService ioService, final List<MediaType> acceptableTypes,
             final String mimeType) {
@@ -201,7 +197,7 @@ public final class HttpUtils {
             }
         }
         LOGGER.debug("Valid syntax not found among {} or {}", acceptableTypes, mimeType);
-        throw new NotAcceptableException();
+        throw TrellisHttpException.notAcceptable();
     }
 
     /**
@@ -274,7 +270,7 @@ public final class HttpUtils {
         if (isGetOrHead(method)) {
             final Instant time = parseDate(ifModifiedSince);
             if (time != null && time.isAfter(modified.truncatedTo(SECONDS))) {
-                throw new RedirectionException(notModified().build());
+                throw new TrellisHttpException(TrellisResponse.notModified().build());
             }
         }
     }
@@ -287,7 +283,7 @@ public final class HttpUtils {
     public static void checkIfUnmodifiedSince(final String ifUnmodifiedSince, final Instant modified) {
         final Instant time = parseDate(ifUnmodifiedSince);
         if (time != null && modified.truncatedTo(SECONDS).isAfter(time)) {
-            throw new ClientErrorException(status(PRECONDITION_FAILED).build());
+            throw TrellisHttpException.of(PRECONDITION_FAILED);
         }
     }
 
@@ -306,10 +302,10 @@ public final class HttpUtils {
         }
         try {
             if (etag.isWeak() || items.stream().map(EntityTag::valueOf).noneMatch(isEqual(etag))) {
-                    throw new ClientErrorException(status(PRECONDITION_FAILED).build());
+                    throw TrellisHttpException.of(PRECONDITION_FAILED);
             }
         } catch (final IllegalArgumentException ex) {
-            throw new BadRequestException(ex);
+            throw TrellisHttpException.badRequest(ex.getMessage());
         }
     }
 
@@ -328,11 +324,11 @@ public final class HttpUtils {
         if (isGetOrHead(method)) {
             if ("*".equals(ifNoneMatch) || items.stream().map(EntityTag::valueOf)
                     .anyMatch(e -> e.equals(etag) || e.equals(new EntityTag(etag.getValue(), !etag.isWeak())))) {
-                throw new RedirectionException(notModified().build());
+                throw new TrellisHttpException(TrellisResponse.notModified().build());
             }
         } else {
             if ("*".equals(ifNoneMatch) || items.stream().map(EntityTag::valueOf).anyMatch(isEqual(etag))) {
-                throw new ClientErrorException(status(PRECONDITION_FAILED).build());
+                throw TrellisHttpException.of(PRECONDITION_FAILED);
             }
         }
      }
@@ -361,7 +357,7 @@ public final class HttpUtils {
     public static void checkRequiredPreconditions(final boolean required, final String ifMatch,
             final String ifUnmodifiedSince) {
         if (required && ifMatch == null && ifUnmodifiedSince == null) {
-            throw new ClientErrorException(status(PRECONDITION_REQUIRED).build());
+            throw TrellisHttpException.of(PRECONDITION_REQUIRED);
         }
     }
 
@@ -393,7 +389,7 @@ public final class HttpUtils {
      * @return an absolute URL
      */
     public static String buildResourceUrl(final TrellisRequest req, final String baseUrl) {
-        return fromUri(baseUrl).path(normalizePath(req.getPath()) + (req.hasTrailingSlash() ? "/" : "")).build()
+        return Uris.resolve(baseUrl, normalizePath(req.getPath()) + (req.hasTrailingSlash() ? "/" : ""))
             .toString();
     }
 

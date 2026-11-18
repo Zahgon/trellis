@@ -28,15 +28,14 @@ import static java.util.stream.Collectors.toList;
 import static java.util.stream.Stream.concat;
 import static java.util.stream.Stream.empty;
 import static java.util.stream.Stream.of;
-import static javax.ws.rs.HttpMethod.GET;
-import static javax.ws.rs.HttpMethod.HEAD;
-import static javax.ws.rs.HttpMethod.OPTIONS;
-import static javax.ws.rs.core.HttpHeaders.ALLOW;
-import static javax.ws.rs.core.Link.TYPE;
-import static javax.ws.rs.core.Response.Status.FOUND;
-import static javax.ws.rs.core.Response.ok;
-import static javax.ws.rs.core.Response.status;
-import static javax.ws.rs.core.UriBuilder.fromUri;
+import static org.trellisldp.common.HttpConstants.GET;
+import static org.trellisldp.common.HttpConstants.HEAD;
+import static org.trellisldp.common.HttpConstants.OPTIONS;
+import static org.trellisldp.common.TrellisResponse.ALLOW;
+import static org.trellisldp.common.LinkHeader.TYPE;
+import static org.trellisldp.common.HttpStatus.FOUND;
+import static org.trellisldp.common.TrellisResponse.ok;
+import static org.trellisldp.common.TrellisResponse.status;
 import static org.trellisldp.common.HttpConstants.APPLICATION_LINK_FORMAT;
 import static org.trellisldp.common.HttpConstants.DATETIME;
 import static org.trellisldp.common.HttpConstants.FROM;
@@ -51,20 +50,23 @@ import static org.trellisldp.vocabulary.JSONLD.compacted;
 import static org.trellisldp.vocabulary.LDP.RDFSource;
 import static org.trellisldp.vocabulary.LDP.Resource;
 
+import java.net.URI;
 import java.time.Instant;
 import java.util.Iterator;
 import java.util.List;
 import java.util.SortedSet;
 import java.util.stream.Stream;
 
-import javax.ws.rs.core.Link;
-import javax.ws.rs.core.MediaType;
-import javax.ws.rs.core.Response.ResponseBuilder;
-import javax.ws.rs.core.StreamingOutput;
+import org.trellisldp.common.LinkHeader;
+import org.trellisldp.common.MediaType;
+import org.trellisldp.common.TrellisResponse;
+import org.trellisldp.common.StreamWriter;
 
 import org.apache.commons.rdf.api.IRI;
 import org.apache.commons.rdf.api.RDFSyntax;
 import org.trellisldp.common.ServiceBundler;
+import org.trellisldp.common.Uris;
+import org.trellisldp.common.StreamWriter;
 import org.trellisldp.common.TrellisRequest;
 
 /**
@@ -101,15 +103,15 @@ public final class MementoResource {
      * @param req the LDP request
      * @return a response builder object
      */
-    public ResponseBuilder getTimeMapBuilder(final SortedSet<Instant> mementos, final TrellisRequest req,
+    public TrellisResponse.Builder getTimeMapBuilder(final SortedSet<Instant> mementos, final TrellisRequest req,
             final String baseUrl) {
 
         final List<MediaType> acceptableTypes = req.getAcceptableMediaTypes();
         final String identifier = HttpUtils.buildResourceUrl(req, baseUrl);
-        final List<Link> allLinks = getMementoLinks(identifier, mementos).collect(toList());
+        final List<LinkHeader> allLinks = getMementoLinks(identifier, mementos).collect(toList());
 
-        final ResponseBuilder builder = ok().link(identifier, ORIGINAL + " " + TIMEGATE);
-        builder.links(getMementoHeaders(identifier, mementos).map(this::filterLinkParams).toArray(Link[]::new))
+        final TrellisResponse.Builder builder = ok().link(identifier, ORIGINAL + " " + TIMEGATE);
+        builder.links(getMementoHeaders(identifier, mementos).map(this::filterLinkParams).collect(toList()))
             .link(Resource.getIRIString(), TYPE).link(RDFSource.getIRIString(), TYPE)
             .header(ALLOW, join(",", GET, HEAD, OPTIONS));
 
@@ -119,13 +121,13 @@ public final class MementoResource {
             final IRI profile = getProfile(acceptableTypes, syntax);
             final IRI jsonldProfile = profile != null ? profile : compacted;
 
-            return builder.type(syntax.mediaType()).entity((StreamingOutput) out ->
+            return builder.type(syntax.mediaType()).entity((StreamWriter) out ->
                 trellis.getIOService().write(trellis.getTimemapGenerator()
                         .asRdf(identifier, allLinks), out, syntax, baseUrl, jsonldProfile));
         }
 
         return builder.type(APPLICATION_LINK_FORMAT)
-            .entity(allLinks.stream().map(this::filterLinkParams).map(Link::toString).collect(joining(",\n")) + "\n");
+            .entity(allLinks.stream().map(this::filterLinkParams).map(LinkHeader::toString).collect(joining(",\n")) + "\n");
     }
 
     /**
@@ -136,21 +138,21 @@ public final class MementoResource {
      * @param baseUrl the base URL
      * @return a response builder object
      */
-    public ResponseBuilder getTimeGateBuilder(final SortedSet<Instant> mementos, final TrellisRequest req,
+    public TrellisResponse.Builder getTimeGateBuilder(final SortedSet<Instant> mementos, final TrellisRequest req,
             final String baseUrl) {
         final String identifier = HttpUtils.buildResourceUrl(req, baseUrl);
         return status(FOUND)
-            .location(fromUri(identifier + VERSION_PARAM + req.getDatetime().getInstant().getEpochSecond()).build())
+            .location(Uris.parse(identifier + VERSION_PARAM + req.getDatetime().getInstant().getEpochSecond()))
             .link(identifier, ORIGINAL + " " + TIMEGATE)
-            .links(getMementoHeaders(identifier, mementos).map(this::filterLinkParams).toArray(Link[]::new));
+            .links(getMementoHeaders(identifier, mementos).map(this::filterLinkParams).collect(toList()));
     }
 
     /**
-     * Filter link parameters from a provided Link object, if configured to do so.
+     * Filter link parameters from a provided LinkHeader object, if configured to do so.
      * @param link the link
-     * @return a Link without Memento parameters, if desired; otherwise, the original link
+     * @return a LinkHeader without Memento parameters, if desired; otherwise, the original link
      */
-    public Link filterLinkParams(final Link link) {
+    public LinkHeader filterLinkParams(final LinkHeader link) {
         return filterLinkParams(link, !includeMementoDates);
     }
 
@@ -161,14 +163,14 @@ public final class MementoResource {
      * @param mementos a collection of memento values
      * @return a stream of link headers
      */
-    public static Stream<Link> getMementoLinks(final String identifier, final SortedSet<Instant> mementos) {
+    public static Stream<LinkHeader> getMementoLinks(final String identifier, final SortedSet<Instant> mementos) {
         if (mementos.isEmpty()) {
             return empty();
         }
         return concat(
                 of(
-                    Link.fromUri(identifier).rel(TIMEGATE).rel(ORIGINAL).build(),
-                    Link.fromUri(identifier + TIMEMAP_PARAM).rel(TIMEMAP).type(APPLICATION_LINK_FORMAT)
+                    LinkHeader.fromUri(identifier).rel(TIMEGATE).rel(ORIGINAL).build(),
+                    LinkHeader.fromUri(identifier + TIMEMAP_PARAM).rel(TIMEMAP).type(APPLICATION_LINK_FORMAT)
                         .param(FROM, ofInstant(mementos.first().truncatedTo(SECONDS), UTC).format(RFC_1123_DATE_TIME))
                         .param(UNTIL, ofInstant(mementos.last().truncatedTo(SECONDS), UTC).format(RFC_1123_DATE_TIME))
                         .build()),
@@ -191,7 +193,7 @@ public final class MementoResource {
      * @param time the time of the current memento
      * @return a stream of link headers
      */
-    public static Stream<Link> getMementoHeaders(final String identifier, final SortedSet<Instant> mementos,
+    public static Stream<LinkHeader> getMementoHeaders(final String identifier, final SortedSet<Instant> mementos,
             final Instant time) {
         if (mementos.isEmpty()) {
             return empty();
@@ -199,31 +201,31 @@ public final class MementoResource {
             // No prev/next with only one Memento
             return of(
                 // TimeMap
-                Link.fromUri(identifier + TIMEMAP_PARAM).rel(TIMEMAP).type(APPLICATION_LINK_FORMAT)
+                LinkHeader.fromUri(identifier + TIMEMAP_PARAM).rel(TIMEMAP).type(APPLICATION_LINK_FORMAT)
                     .param(FROM, ofInstant(mementos.first().truncatedTo(SECONDS), UTC).format(RFC_1123_DATE_TIME))
                     .param(UNTIL, ofInstant(mementos.last().truncatedTo(SECONDS), UTC).format(RFC_1123_DATE_TIME))
                     .build(),
                 // First, Last
-                Link.fromUri(identifier + VERSION_PARAM + mementos.first().truncatedTo(SECONDS).getEpochSecond())
+                LinkHeader.fromUri(identifier + VERSION_PARAM + mementos.first().truncatedTo(SECONDS).getEpochSecond())
                     .rel(FIRST).rel(LAST).rel(MEMENTO)
                     .param(DATETIME, ofInstant(mementos.first().truncatedTo(SECONDS), UTC).format(RFC_1123_DATE_TIME))
                     .build());
         }
 
-        final Stream.Builder<Link> builder = Stream.builder();
+        final Stream.Builder<LinkHeader> builder = Stream.builder();
         // TimeMap link
-        builder.accept(Link.fromUri(identifier + TIMEMAP_PARAM).rel(TIMEMAP).type(APPLICATION_LINK_FORMAT)
+        builder.accept(LinkHeader.fromUri(identifier + TIMEMAP_PARAM).rel(TIMEMAP).type(APPLICATION_LINK_FORMAT)
                     .param(FROM, ofInstant(mementos.first().truncatedTo(SECONDS), UTC).format(RFC_1123_DATE_TIME))
                     .param(UNTIL, ofInstant(mementos.last().truncatedTo(SECONDS), UTC).format(RFC_1123_DATE_TIME))
                     .build());
 
         // First link
-        final Link.Builder first = Link.fromUri(identifier + VERSION_PARAM + mementos.first().truncatedTo(SECONDS)
+        final LinkHeader.Builder first = LinkHeader.fromUri(identifier + VERSION_PARAM + mementos.first().truncatedTo(SECONDS)
                 .getEpochSecond()).rel(FIRST).rel(MEMENTO)
                 .param(DATETIME, ofInstant(mementos.first().truncatedTo(SECONDS), UTC).format(RFC_1123_DATE_TIME));
 
         // Last link
-        final Link.Builder last = Link.fromUri(identifier + VERSION_PARAM + mementos.last().truncatedTo(SECONDS)
+        final LinkHeader.Builder last = LinkHeader.fromUri(identifier + VERSION_PARAM + mementos.last().truncatedTo(SECONDS)
                 .getEpochSecond()).rel(LAST).rel(MEMENTO)
                 .param(DATETIME, ofInstant(mementos.last().truncatedTo(SECONDS), UTC).format(RFC_1123_DATE_TIME));
 
@@ -237,7 +239,7 @@ public final class MementoResource {
                     first.rel(PREV);
                 } else {
                     // Prev link
-                    builder.accept(Link.fromUri(identifier + VERSION_PARAM + prev.truncatedTo(SECONDS).getEpochSecond())
+                    builder.accept(LinkHeader.fromUri(identifier + VERSION_PARAM + prev.truncatedTo(SECONDS).getEpochSecond())
                             .rel(PREV).rel(MEMENTO)
                             .param(DATETIME, ofInstant(prev.truncatedTo(SECONDS), UTC).format(RFC_1123_DATE_TIME))
                             .build());
@@ -252,7 +254,7 @@ public final class MementoResource {
                     last.rel(NEXT);
                 } else {
                     // Next link
-                    builder.accept(Link.fromUri(identifier + VERSION_PARAM + next.truncatedTo(SECONDS)
+                    builder.accept(LinkHeader.fromUri(identifier + VERSION_PARAM + next.truncatedTo(SECONDS)
                             .getEpochSecond()).rel(NEXT).rel(MEMENTO)
                             .param(DATETIME, ofInstant(next.truncatedTo(SECONDS), UTC).format(RFC_1123_DATE_TIME))
                             .build());
@@ -272,24 +274,24 @@ public final class MementoResource {
      * @param mementos the mementos
      * @return a stream of link headers
      */
-    public static Stream<Link> getMementoHeaders(final String identifier, final SortedSet<Instant> mementos) {
+    public static Stream<LinkHeader> getMementoHeaders(final String identifier, final SortedSet<Instant> mementos) {
         return getMementoHeaders(identifier, mementos, null);
     }
 
     /**
-     * Filter link parameters from a provided Link object, if configured to do so.
+     * Filter link parameters from a provided LinkHeader object, if configured to do so.
      * @param link the link
      * @param filter whether to filter the memento parameters
-     * @return a Link without Memento parameters, if desired; otherwise, the original link
+     * @return a LinkHeader without Memento parameters, if desired; otherwise, the original link
      */
-    public static Link filterLinkParams(final Link link, final boolean filter) {
+    public static LinkHeader filterLinkParams(final LinkHeader link, final boolean filter) {
         // from and until parameters can cause problems with downstream applications because they contain commas. This
         // method makes it possible to filter out those params, if desired. By default, they are not filtered out.
         if (filter) {
             if (TIMEMAP.equals(link.getRel())) {
-                return Link.fromUri(link.getUri()).rel(TIMEMAP).type(APPLICATION_LINK_FORMAT).build();
+                return LinkHeader.fromUri(link.getUri()).rel(TIMEMAP).type(APPLICATION_LINK_FORMAT).build();
             } else if (link.getRels().contains(MEMENTO)) {
-                final Link.Builder builder = Link.fromUri(link.getUri());
+                final LinkHeader.Builder builder = LinkHeader.fromUri(link.getUri());
                 link.getRels().forEach(builder::rel);
                 return builder.build();
             }
@@ -304,8 +306,8 @@ public final class MementoResource {
      * @param rels any optional rel values
      * @return a link header
      */
-    public static Link mementoToLink(final String identifier, final Instant time, final List<String> rels) {
-        final Link.Builder builder = Link.fromUri(identifier + VERSION_PARAM + time.truncatedTo(SECONDS)
+    public static LinkHeader mementoToLink(final String identifier, final Instant time, final List<String> rels) {
+        final LinkHeader.Builder builder = LinkHeader.fromUri(identifier + VERSION_PARAM + time.truncatedTo(SECONDS)
                 .getEpochSecond()).rel(MEMENTO).param(DATETIME, ofInstant(time.truncatedTo(SECONDS), UTC)
                         .format(RFC_1123_DATE_TIME));
         rels.forEach(builder::rel);
